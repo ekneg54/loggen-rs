@@ -1,9 +1,17 @@
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
-use serde::Deserialize;
+use loggen_rs::{read_yaml_file, Config};
+
+
 
 fn main() {
-    println!("Hello, world!");
+    let path = "test_config.yaml";
+    let result = read_yaml_file::<Config, &str>(path);
+    match result {
+        Ok(config) => {
+            println!("{:?}", config);
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+        }
+    }
 }
 

@@ -2,6 +2,14 @@ use std::{fs::File, io::Read, path::Path};
 
 use serde::Deserialize;
 
+#[derive(Debug, Deserialize)]
+pub struct Config {
+    name: String,
+    version: String,
+}
+
+
+
 /// Reads a YAML file and deserializes it into the specified type
 pub fn read_yaml_file<T, P>(path: P) -> Result<T, Box<dyn std::error::Error>>
 where

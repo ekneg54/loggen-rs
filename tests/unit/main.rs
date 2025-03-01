@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::Write;
-use loggen_rs::read_yaml_file;
+use loggen_rs::{read_yaml_file, Config};
 
 
 #[cfg(test)]
@@ -33,7 +33,7 @@ settings:
   }
   
   // Test the function
-  let result = read_yaml_file(test_file_path);
+  let result = read_yaml_file::<Config, &str>(test_file_path);
   
   // Clean up
   std::fs::remove_file(test_file_path).unwrap();
