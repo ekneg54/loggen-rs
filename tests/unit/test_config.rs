@@ -3,13 +3,6 @@ use std::io::Write;
 use loggen_rs::{read_yaml_file, Config};
 
 
-#[cfg(test)]
-mod tests {
-  #[test]
-  fn test_addition() {
-    assert_eq!(2 + 2, 4);
-  }
-}
 #[test]
 fn test_read_yaml_file() {
   
