@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::Write;
-use loggen_rs::{read_yaml_file, Config};
+use loggen::{read_yaml_file, Config};
 
 
 #[test]
