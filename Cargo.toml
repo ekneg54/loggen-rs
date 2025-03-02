@@ -1,5 +1,6 @@
 [package]
-name = "loggen_rs"
+name = "loggen"
+description = "a log generator, simulator and repeater"
 version = "0.1.0"
 edition = "2021"
 
