@@ -1,6 +1,6 @@
 [package]
 name = "loggen"
-description = "a log generator, simulator and repeater"
+description = "a log generator"
 version = "0.1.0"
 edition = "2021"
 
