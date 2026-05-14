@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use loggen::config::OutputConfig;
 use loggen::output::{FileWriter, StdoutWriter};
 use loggen::{Config, Generator, LogWriter};
@@ -25,7 +25,7 @@ enum Commands {
         output: Option<String>,
 
         /// Number of log entries to generate
-        #[arg(short, long, default_value_t = 1)]
+        #[arg(short = 'n', long, default_value_t = 1)]
         count: u64,
 
         /// Log level
@@ -52,7 +52,23 @@ enum Commands {
     },
 }
 
+fn try_show_completion_help() -> Option<clap::Command> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.last().map(|s| s.as_str()) != Some("help") {
+        return None;
+    }
+    let subcmd_name = args.iter().skip(1).find(|a| !a.starts_with('-'))?;
+    let mut cmd = Cli::command();
+    cmd.find_subcommand_mut(subcmd_name).cloned()
+}
+
 fn main() {
+    if let Some(mut subcmd) = try_show_completion_help() {
+        subcmd.print_help().unwrap();
+        println!();
+        return;
+    }
+
     let cli = Cli::parse();
 
     match cli.command {

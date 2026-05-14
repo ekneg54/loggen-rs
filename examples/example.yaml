@@ -1,0 +1,11 @@
+# loggen example configuration
+# Every option here has a corresponding CLI flag.
+# Usage: cargo run -- generate --config=examples/example.yaml
+
+output:
+  target: stdout
+  # path: /tmp/output.log     # uncomment to write to file instead
+
+count: 10
+log_level: INFO
+message: "Example log entry"

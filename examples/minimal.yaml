@@ -1,0 +1,3 @@
+# Minimal loggen config — all other fields use defaults.
+# Usage: cargo run -- generate --config=examples/minimal.yaml
+count: 5

@@ -1,0 +1,10 @@
+# loggen example: file output
+# Usage: cargo run -- generate --config=examples/file-output.yaml
+
+output:
+  target: file
+  path: /tmp/loggen-example.log
+
+count: 100
+log_level: ERROR
+message: "File output test"
