@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use loggen::cli::{apply_cli_args, create_writer, load_base_config};
+use loggen::cli::{apply_cli_args, create_writer, load_base_config, load_attack_config_file, merge_cli_attacks, parse_attack_spec};
 use loggen::Generator;
 
 #[derive(Parser)]
@@ -43,6 +43,18 @@ enum Commands {
         /// Template file or directory containing .logtpl template files
         #[arg(long = "templates", value_name = "PATH")]
         templates: Option<String>,
+
+        /// Define an inline attack (repeatable, name=type:template[:count])
+        #[arg(long = "attack", value_name = "ATTACK_SPEC", action = clap::ArgAction::Append)]
+        attack: Vec<String>,
+
+        /// Load attacks from YAML file
+        #[arg(long = "attack-config", value_name = "FILE")]
+        attack_config: Option<PathBuf>,
+
+        /// Generate only attack entries (no normal logs)
+        #[arg(long = "attack-only")]
+        attack_only: bool,
     },
 
     /// Send logs to an HTTP endpoint (not yet implemented)
@@ -90,10 +102,33 @@ fn handle_generate(
     message: Option<String>,
     var: Vec<String>,
     templates: Option<String>,
+    attack: Vec<String>,
+    attack_config: Option<PathBuf>,
+    attack_only: bool,
 ) {
     let cli_vars = parse_var_args(var);
+
+    // Parse inline --attack specs
+    let mut cli_attacks: Vec<loggen::AttackConfig> = Vec::new();
+    for spec in &attack {
+        if let Some((_name, config)) = parse_attack_spec(spec) {
+            cli_attacks.push(config);
+        } else {
+            eprintln!("Warning: ignoring malformed --attack '{}' (expected name=type:template[:count])", spec);
+        }
+    }
+
+    // Load --attack-config file
+    if let Some(ref path) = attack_config {
+        let file_attacks = load_attack_config_file(path);
+        cli_attacks.extend(file_attacks);
+    }
+
+    // Merge multi_ordered attacks with same name
+    let cli_attacks = merge_cli_attacks(cli_attacks);
+
     let base = load_base_config(config_path);
-    let config = apply_cli_args(base, output, count, level, message, cli_vars, templates);
+    let config = apply_cli_args(base, output, count, level, message, cli_vars, templates, cli_attacks, attack_only);
     let generator = Generator::new(config);
     let mut writer = create_writer(generator.config())
         .unwrap_or_else(|e| {
@@ -131,7 +166,10 @@ fn main() {
             message,
             var,
             templates,
-        }) => handle_generate(cli.config.as_ref(), output, count, level, message, var, templates),
+            attack,
+            attack_config,
+            attack_only,
+        }) => handle_generate(cli.config.as_ref(), output, count, level, message, var, templates, attack, attack_config, attack_only),
         Some(Commands::Http { url }) => handle_http(url),
         Some(Commands::Kafka { kafkaconfig }) => handle_kafka(kafkaconfig),
         None => {

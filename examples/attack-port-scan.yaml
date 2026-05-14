@@ -1,0 +1,27 @@
+# loggen example: Port scan attack pattern
+# Simulates a sequential port scan using CONNECT probes from a single IP with nmap UA.
+# Uses multi_ordered to ensure ports are scanned in sequence.
+# Usage: cargo run -- generate --config=examples/attack-port-scan.yaml
+output:
+  target: stdout
+
+count: 100
+log_level: INFO
+
+attacks:
+  - name: port-scan
+    type: multi_ordered
+    sequence:
+      - '{{ ipv4 }} - - [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}] "CONNECT 10.0.0.1:22 HTTP/1.1" 200 0 "-" "nmap/7.80"'
+      - '{{ ipv4 }} - - [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}] "CONNECT 10.0.0.1:80 HTTP/1.1" 200 0 "-" "nmap/7.80"'
+      - '{{ ipv4 }} - - [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}] "CONNECT 10.0.0.1:443 HTTP/1.1" 200 0 "-" "nmap/7.80"'
+      - '{{ ipv4 }} - - [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}] "CONNECT 10.0.0.1:8080 HTTP/1.1" 200 0 "-" "nmap/7.80"'
+      - '{{ ipv4 }} - - [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}] "CONNECT 10.0.0.1:3306 HTTP/1.1" 200 0 "-" "nmap/7.80"'
+    count: 100
+    repeat: loop
+    interleave: false
+    vars:
+      # Fixed attacker IP
+      ipv4:
+        values: ["10.0.0.5"]
+        mode: cycle

@@ -1,0 +1,20 @@
+# loggen example: DDoS ramp-up attack pattern
+# Simulates a DDoS attack with rotating source IPs.
+# Uses threshold_field to bias status codes toward 5xx errors (70% >= 500).
+# Usage: cargo run -- generate --config=examples/attack-ddos.yaml
+output:
+  target: stdout
+
+count: 100
+log_level: INFO
+
+attacks:
+  - name: ddos
+    type: threshold_field
+    template: '{{ ipv4 }} - - [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}] "GET /index.html HTTP/1.1" {{ status }} {{ port }} "-" "{{ user_agent }}"'
+    count: 100
+    interleave: false
+    threshold:
+      field: status
+      min: 500
+      proportion: 0.7
