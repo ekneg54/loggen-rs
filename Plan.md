@@ -24,21 +24,68 @@
 ## Phase 2: Template System & Randomization (Weeks 3-4)
 
 ### 2.1 Template Engine Implementation
-- Integrate Jinja-like template system
-- Implement template loading from folder
-- Create template validation system
-- Build template processing engine
+
+**Config changes:**
+- Add optional `logs: Vec<String>` field to `Config` — each string is an inline template. If `logs` or `logs_dir` are set, `message`/`log_level` are ignored (templates take over). If neither is set, fall back to Phase 1 behavior (backwards compatible).
+- Add optional `logs_dir: String` field — path to a directory of `.logtpl` template files. The files are red line by line and every line is a log entry with its jinja template variables. Each file contains one or a set of log entry with template variables.
+- Add optional `template_vars: HashMap<String, String>` field — static variable definitions in YAML (e.g. `template_vars: { app_name: "myapp", host: "web01" }`).
+- Add optional `seed: u64` for reproducible random generation.
+
+**Template syntax:**
+- Use **Tera** crate (Jinja2-inspired, supports `{{ var }}`, filters, `{% if %}`, `{% for %}`). Replaces `handlebars` from the deps list.
+- Support: `{{ var }}` substitution, `{{ var | filter(args) }}`, `{% if %}`, `{% for %}`.
+- Strict validation: any `{{ var }}` used in a template must be defined in one of: (a) `template_vars` in config, (b) CLI `--var` args, (c) built-in variables. Unknown variables cause a startup error.
+
+**Built-in auto-available variables:**
+- `{{ timestamp }}` — current Unix timestamp (format via filter: `{{ timestamp | date(format="%Y-%m-%d") }}`)
+- `{{ level }}` — from `log_level` config / CLI `--level` (default `"INFO"`)
+- `{{ index }}` — 1-based counter within a generation run
+- `{{ message }}` — from `message` config / CLI `--message` (backwards compat)
+
+**CLI additions:**
+- Add `--var key=value` (repeatable) for arbitrary template variables.
+- `--message` still works and maps to `{{ message }}`.
+- Add `--logs_dir` option to reflect the config changes in cli 
+
+**Pipeline changes (`generator.rs`):**
+- `Generator::generate()` loads templates from `config.logs` or files in `config.logs_dir`, or falls back to legacy single-template (`message`/`log_level`) behavior.
+- Creates a Tera instance, registers all templates, validates all referenced variables against the merged variable set.
+- For each of `count` entries: pick template per rotation strategy, render with current variables, produce an output string.
+- `LogEntry.message` holds the fully rendered template string; `write_entry` writes it directly.
 
 ### 2.2 Randomization Features
-- Implement randomization logic for template variables
-- Create realistic data generators (timestamps, IP addresses, user agents)
-- Add configuration options for randomization intensity
-- Implement template-based log entry generation
+
+**Built-in random variable generators:**
+Certain variable names trigger automatic random generation if not explicitly set by the user:
+- `{{ ip }}` → random IPv4
+- `{{ user_agent }}` → random UA string from a built-in list
+- `{{ email }}` → random email
+- `{{ url }}` → random URL path
+- `{{ port }}` → random port number
+- `{{ status }}` → random HTTP status (weighted: 200 most common, then 4xx, 5xx)
+
+User-defined random pools via config: `random_vars: { codes: [200, 201, 404] }` — a var matching a pool name picks a random element each entry.
+
+**Randomization intensity:**
+- Config field `random_intensity: f64` (0.0–1.0, default 1.0):
+  - 1.0 = all applicable variables get random values every entry
+  - 0.5 = ~50% chance per-entry per-variable that it randomizes (else keeps template default / last value)
+  - 0.0 = no randomization
+
+**Template rotation:**
+- Config field `template_rotation: "sequential" | "random" | "round_robin"` (default `"sequential"`):
+  - `"sequential"`: render templates in order, repeat from start
+  - `"random"`: pick a random template per entry
+  - `"round_robin"`: cycle through templates in order, one per entry
 
 ### 2.3 Default Templates
-- Create basic templates for common log formats (Apache, Nginx, Syslog)
-- Add documentation and examples for templates
-- Implement template directory structure
+- Create `templates/` directory with `.logtpl` files: Apache combined, Nginx combined, Syslog (RFC 3164).
+- Each uses built-in variables to demonstrate usage.
+- Add example configs referencing them via `logs_dir`.
+
+### Dependency additions
+- `tera` (replaces `handlebars`)
+- `rand`
 
 ## Phase 3: Attack Pattern Generation (Weeks 5-6)
 
@@ -103,9 +150,10 @@
 ### Core Rust Crates:
 - `clap` or `structopt` for CLI
 - `serde` and `serde_yaml` for configuration
-- `handlebars` or similar for templating
+- `tera` for Jinja2-like templating
 - `tokio` for async operations
 - `regex` for pattern matching
+- `rand` for randomization
 - `chrono` for timestamps
 
 ### Testing Tools:
