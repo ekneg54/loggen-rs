@@ -296,22 +296,506 @@ Each file is self-contained (includes base `count`, `output`, and `attacks`) wit
 ## Phase 4: Performance & Advanced Features (Weeks 7-8)
 
 ### 4.1 Performance Optimization
-- Implement efficient large volume generation
-- Add progress reporting system
-- Optimize memory usage for large log files
-- Implement parallel processing capabilities
+
+#### 4.1.1 Buffered Streaming Writes
+- Introduce `BufferedLogWriter<W: LogWriter>` wrapper struct that buffers output entries before flushing to the underlying writer.
+- Configurable `buffer_size` (bytes, default 8192). Flush to inner writer when buffer exceeds this threshold.
+- Implements `LogWriter` — transparent to the generator pipeline.
+- Automatically wraps `FileWriter` and `StdoutWriter` in `generate_to_writer()` (but not `HttpWriter`/`KafkaWriter` which have their own batching).
+
+**Config changes** — add to `OutputConfig`:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `buffer_size` | `u64` | `8192` | Output buffer in bytes before flush (0 = no buffering). |
+
+#### 4.1.2 Progress Reporting
+- Add `ProgressReporter` struct that emits progress lines to stderr.
+- Configurable via `--progress` CLI flag and `progress: true` config field.
+- Format (single line, overwritten with `\r`):
+  ```
+  [loggen] 50,000 / 100,000 entries (50%) [2.3s elapsed, 21,739/s]
+  ```
+- Reports every 1 second (wall-clock) or every `progress_interval` entries (default 10,000), whichever comes first.
+- Shows final summary on completion: `[loggen] Done: 100,000 entries in 4.1s (24,390/s)`
+- **Silent** when output target is stderr (to avoid corrupting log output). Auto-detects: if `output.target == "stdout"`, progress goes to stderr; if file/HTTP/Kafka, progress also goes to stderr.
+- Uses `AtomicBool` flag checked from the streaming loop — minimal overhead per entry (one atomic load).
+- When no `--progress` flag and no config `progress` field: auto-enable if count >= 100,000 and output is not stdout.
+
+**Config additions:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `progress` | `Option<bool>` | `None` | Enable/disable progress. `None` = auto (on for count >= 100K, off otherwise). |
+| `progress_interval` | `u64` | `10000` | Entry count between progress updates (min 1000). |
+
+**CLI addition:**
+```
+  --progress                  Show progress (auto-enabled for large counts)
+  --no-progress               Disable progress reporting
+```
+
+#### 4.1.3 Parallelism Tuning
+- Add `--threads` CLI flag and `num_threads` config field to control rayon thread pool size.
+- When set, configure rayon's global pool via `rayon::ThreadPoolBuilder::new().num_threads(N).build_global()` before any parallel work.
+- Defaults to `std::thread::available_parallelism().unwrap_or(4)`.
+- Only relevant for the `write_template_parallel_stream` path (random_intensity >= 1.0, no interleaving attacks).
+
+**Config addition:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `num_threads` | `Option<usize>` | `None` | Rayon thread count. `None` = system default. |
+
+#### 4.1.4 Timestamp Caching
+- In the streaming paths (`write_template_stream`, `write_legacy_stream`), compute the RFC 3339 timestamp string once before the loop, not once per entry.
+- In the parallel path, each rayon worker computes its own timestamp per batch (already amortized over 5000 entries).
+- In attack rendering, compute once per call to `render_attack_entry` (no change needed there).
+
+**Performance targets** (measured on a modern 4+ core system, release build):
+- Legacy mode (`message`/`level` only): ≥ 500,000 entries/sec
+- Single template with 2 static vars: ≥ 300,000 entries/sec
+- Template with random vars (`ip`, `status`, `user_agent`): ≥ 100,000 entries/sec
+- Parallel path (intensity=1.0, 4+ templates): ≥ 200,000 entries/sec
+- Attack `single_event` (serial, 3 random vars): ≥ 80,000 entries/sec
+- Memory: peak < 50 MB RSS for 1M entries streamed to file
 
 ### 4.2 Advanced Streaming
-- Complete stdout/file output functionality
-- Implement HTTP endpoint streaming (basic version)
-- Add Kafka broker streaming support
-- Create output buffering system
+
+#### 4.2.1 HTTP Output (`HttpWriter`)
+
+**Architecture decision:** HTTP is implemented as a `LogWriter`, not a separate subcommand. The existing `Http` subcommand is removed.
+
+**Implementation:**
+- New struct `HttpWriter` implementing `LogWriter`.
+- Uses the `ureq` crate (blocking HTTP client, no async runtime required).
+- Entries are **batched**: accumulate up to `batch_size` entries in a `Vec<String>`, then POST them as a JSON array or NDJSON.
+- POST body format (controlled by `format`):
+  - `"ndjson"` (default): each log entry on its own line, `Content-Type: application/x-ndjson`
+  - `"json"`: single JSON array of entry objects, `Content-Type: application/json`
+  - `"raw"`: raw text body, one entry per line, `Content-Type: text/plain`
+- Each entry in the batch is the `LogEntry.message` field (already rendered).
+- On HTTP error (non-2xx): retry up to `retry_attempts` times with `retry_delay_ms` backoff between attempts.
+- After exhausting retries: stop log generation with an error message (not a panic).
+- Connection timeout: 5 seconds. Read timeout: 10 seconds.
+
+**Config additions** — add to `OutputConfig`:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | `Option<String>` | `None` | HTTP endpoint URL (required when `target: "http"`). |
+| `batch_size` | `u64` | `100` | Max entries per POST request. |
+| `format` | `String` | `"ndjson"` | Body format: `"ndjson"`, `"json"`, or `"raw"`. |
+| `headers` | `Option<HashMap<String, String>>` | `None` | Custom HTTP headers (e.g. `Authorization: Bearer ...`). |
+| `retry_attempts` | `u32` | `3` | Max retries on failed POST. |
+| `retry_delay_ms` | `u64` | `1000` | Delay between retries (ms). |
+
+**Example YAML:**
+```yaml
+output:
+  target: http
+  url: https://logs.example.com/api/v1/ingest
+  batch_size: 500
+  format: ndjson
+  headers:
+    Authorization: "Bearer token123"
+    X-Source: "loggen"
+  retry_attempts: 3
+  retry_delay_ms: 2000
+count: 10000
+templates: ./templates/
+```
+
+#### 4.2.2 Kafka Output (`KafkaWriter`)
+
+**Architecture decision:** Same as HTTP — a `LogWriter` implementation. The existing `Kafka` subcommand is removed.
+
+**Implementation:**
+- New struct `KafkaWriter` implementing `LogWriter`.
+- Uses the `rdkafka` crate with `base` feature (no tokio, no async).
+- Connects on construction using configured brokers.
+- Each log entry is produced as a single message to the configured topic.
+- Optional key: if `key_var` is set, the value of that template variable from the last-rendered entry is used as the Kafka message key. This enables log partitioning by e.g. source IP.
+- Producer config:
+  - `acks`: `"1"` (default, leader acknowledges). Configurable: `"0"`, `"1"`, `"all"`.
+  - `queue.buffering.max.ms`: 100 (flush every 100ms).
+  - `message.timeout.ms`: 5000.
+- On producer error: log to stderr and continue (non-fatal). Count failures.
+- On construction failure (e.g. unreachable broker): exit with error message.
+
+**Config additions** — add to `OutputConfig`:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `kafka` | `Option<KafkaOutputConfig>` | `None` | Kafka-specific settings (required when `target: "kafka"`). |
+
+**`KafkaOutputConfig` struct:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `brokers` | `String` | `"localhost:9092"` | Comma-separated list of broker addresses. |
+| `topic` | `String` | required | Kafka topic name. |
+| `key_var` | `Option<String>` | `None` | Template variable name to use as message key. |
+| `acks` | `String` | `"1"` | Required acks: `"0"`, `"1"`, `"all"`. |
+| `timeout_ms` | `u64` | `5000` | Message delivery timeout (ms). |
+| `batch_size` | `u64` | `100` | Max messages to buffer before flushing to librdkafka. |
+
+**Example YAML:**
+```yaml
+output:
+  target: kafka
+  kafka:
+    brokers: "kafka-1:9092,kafka-2:9092"
+    topic: "app-logs"
+    key_var: "ipv4"
+    acks: "all"
+count: 50000
+templates: ./templates/
+```
+
+#### 4.2.3 File Output Enhancements
+
+- Add `output.append: bool` (default `true` for backward compatibility).
+- When `append: false`, use `OpenOptions::new().write(true).create(true).truncate(true)` instead of `append(true)`.
+- Add `output.rotate_bytes: Option<u64>` (default `None`, i.e. no rotation).
+  - When set, track bytes written to the current output file.
+  - After each `write_entry` call, if cumulative bytes exceed `rotate_bytes`:
+    1. Rename current file to `{path}.1` (overwriting previous `.1` if it exists).
+    2. Open a new file at the original path.
+  - No limit on number of backups — `.1` is always the single backup.
+
+**Config additions** to `OutputConfig`:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `append` | `bool` | `true` | Append to existing file vs truncate. |
+| `rotate_bytes` | `Option<u64>` | `None` | Rotate (rename to .1) after this many bytes. |
 
 ### 4.3 CLI Enhancements
-- Complete help system and usage examples
-- Add advanced CLI options
-- Implement configuration validation
-- Add command completion support
+
+#### 4.3.1 Shell Completion Support
+
+- Add new subcommand `Completions`:
+  ```rust
+  /// Generate shell completion script
+  Completions {
+      /// Shell type: bash, zsh, fish, powershell, elvish
+      shell: String,
+  }
+  ```
+- Uses the `clap_complete` crate to generate and print the completion script to stdout.
+- User pipes it to their shell config:
+  ```bash
+  loggen completions bash > /etc/bash_completion.d/loggen
+  loggen completions zsh > /usr/local/share/zsh/site-functions/_loggen
+  loggen completions fish > ~/.config/fish/completions/loggen.fish
+  ```
+- Detection: if running interactively and no subcommand given, suggest running `loggen completions <shell>`.
+
+#### 4.3.2 Config Validation
+
+- Add `--validate` flag to `Generate` subcommand.
+  ```rust
+  /// Validate configuration and exit (no generation)
+  #[arg(long)]
+  validate: bool,
+  ```
+- When `--validate` is set:
+  1. Load and merge config (same logic as normal run).
+  2. Attempt `Generator::new(config)` — this panics on unknown template vars, catches the panic and prints a clean error message.
+  3. Print validation summary: `"Config valid: N template(s), M attack(s), K entry/ies"`.
+  4. Exit with code 0 on success, 1 on failure.
+- Validation checks (in addition to existing template var validation):
+  - Attack config consistency:
+    - `threshold_field` must have `threshold` block.
+    - `multi_ordered` must have non-empty `sequence`.
+    - `single_event` must have non-empty `template`.
+    - Attack counts must not exceed `count` if `attack_only` is false and `interleave` is false (warn, not error).
+  - Output config consistency:
+    - `target: "http"` requires `url`.
+    - `target: "kafka"` requires `kafka` block with `topic`.
+  - `random_intensity` must be 0.0–1.0.
+  - `weight` values in attacks must be 0.0–1.0.
+
+#### 4.3.3 Help System Improvements
+
+- Add `after_help` to `Generate` subcommand with usage examples:
+  ```
+  EXAMPLES:
+    loggen generate --count 100
+    loggen generate -c examples/example.yaml
+    loggen generate --templates ./templates/ --count 10000 --output output.log
+    loggen generate --attack "brute=single:{{ ipv4 }} - POST /login {{ status }} :50"
+  ```
+- Add `after_help` to `Http` and `Kafka` subcommands.
+- Remove the `try_show_completion_help` workaround if clap's native `SubcommandRequiredElseHelp` handles it properly; otherwise keep it.
+- Add a top-level `after_help` showing:
+  ```
+  Run 'loggen <subcommand> --help' for subcommand-specific help.
+  Run 'loggen completions <shell>' to generate shell completion scripts.
+  ```
+
+### 4.4 Config Struct Changes
+
+New fields in `OutputConfig` (existing: `target`, `path`):
+
+```rust
+// New fields for OutputConfig
+#[serde(default)]
+pub buffer_size: u64,
+#[serde(default)]
+pub progress: Option<bool>,
+#[serde(default)]
+pub progress_interval: u64,
+#[serde(default)]
+pub url: Option<String>,
+#[serde(default)]
+pub batch_size: u64,
+#[serde(default = "default_output_format")]
+pub format: String,
+#[serde(default)]
+pub headers: Option<HashMap<String, String>>,
+#[serde(default)]
+pub retry_attempts: u32,
+#[serde(default)]
+pub retry_delay_ms: u64,
+#[serde(default)]
+pub kafka: Option<KafkaOutputConfig>,
+#[serde(default = "default_append")]
+pub append: bool,
+#[serde(default)]
+pub rotate_bytes: Option<u64>,
+```
+
+New structs:
+
+```rust
+#[derive(Debug, Clone, Deserialize)]
+pub struct KafkaOutputConfig {
+    #[serde(default = "default_kafka_brokers")]
+    pub brokers: String,
+    pub topic: String,
+    #[serde(default)]
+    pub key_var: Option<String>,
+    #[serde(default = "default_kafka_acks")]
+    pub acks: String,
+    #[serde(default = "default_kafka_timeout")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_kafka_batch")]
+    pub batch_size: u64,
+}
+```
+
+New top-level Config fields:
+
+```rust
+#[serde(default)]
+pub num_threads: Option<usize>,
+#[serde(default)]
+pub progress: Option<bool>,
+#[serde(default = "default_progress_interval")]
+pub progress_interval: u64,
+```
+
+### 4.5 New Types / Structs
+
+```
+BufferedLogWriter<W: LogWriter> {
+    inner: W,
+    buffer: Vec<u8>,
+    buffer_size: u64,
+}
+
+HttpWriter {
+    url: String,
+    client: ureq::Agent,
+    batch: Vec<String>,
+    batch_size: u64,
+    format: String,
+    headers: HashMap<String, String>,
+    retry_attempts: u32,
+    retry_delay_ms: u64,
+    fallback_path: Option<String>,
+    entries_sent: u64,
+}
+
+KafkaWriter {
+    producer: rdkafka::producer::FutureProducer,
+    topic: String,
+    key_var: Option<String>,
+    batch: Vec<String>,
+    batch_size: u64,
+    entries_produced: u64,
+    errors: u64,
+}
+
+ProgressReporter {
+    start: Instant,
+    last_report: Instant,
+    interval: Duration,
+    entry_interval: u64,
+    total: u64,
+    last_reported_entry: u64,
+    enabled: bool,
+}
+```
+
+### 4.6 Factory Changes
+
+`create_writer` in `cli.rs` grows to handle new targets:
+
+```rust
+pub fn create_writer(config: &Config) -> Result<Box<dyn LogWriter>, Box<dyn std::error::Error>> {
+    match config.output.target.as_str() {
+        "http" => {
+            validate_http_config(&config.output)?;
+            let writer = HttpWriter::new(&config.output)?;
+            Ok(Box::new(writer))
+        }
+        "kafka" => {
+            validate_kafka_config(&config.output)?;
+            let writer = KafkaWriter::new(&config.output)?;
+            Ok(Box::new(writer))
+        }
+        "file" => {
+            let path = config.output.path.as_deref().unwrap_or("output.log");
+            let writer = FileWriter::new(path, !config.output.append, config.output.rotate_bytes)?;
+            let writer = BufferedLogWriter::new(writer, config.output.buffer_size);
+            Ok(Box::new(writer))
+        }
+        _ => { // "stdout"
+            let writer = StdoutWriter::new();
+            let writer = BufferedLogWriter::new(writer, config.output.buffer_size);
+            Ok(Box::new(writer))
+        }
+    }
+}
+```
+
+### 4.7 Integration Testing
+
+#### Test file `tests/unit/test_phase4.rs` or extend existing files:
+
+**Progress reporting:**
+
+| Test | Scenario | Validation |
+|------|----------|------------|
+| `test_progress_basic_output` | 1000 entries with `progress: true` | stderr contains at least one progress line matching the format `[loggen]` |
+| `test_progress_disabled` | 10 entries without progress flag | No `[loggen]` output on stderr |
+| `test_progress_auto_enable` | 150000 entries, no progress flag, file output | Progress auto-enabled (stderr has progress) |
+| `test_progress_summary_line` | Capture final line after generation completes | Matches `Done: N entries in Xs (Y/s)` |
+
+**Buffering:**
+
+| Test | Scenario | Validation |
+|------|----------|------------|
+| `test_buffered_writer_flush_on_size` | Write 100 small entries with `buffer_size: 50` | Inner writer called fewer than 100 times |
+| `test_buffered_writer_flush_on_drop` | Write entries, drop writer | All entries flushed before drop |
+
+**HTTP writer (requires mock HTTP server):**
+
+| Test | Scenario | Validation |
+|------|----------|------------|
+| `test_http_writer_send_single` | 1 entry, `batch_size: 1` | POST body contains the entry, Content-Type is `application/x-ndjson` |
+| `test_http_writer_batching` | 250 entries, `batch_size: 100` | Exactly 3 POST requests received |
+| `test_http_writer_retry` | Server returns 503 twice, then 200 | Exactly 3 requests made, entries delivered |
+| `test_http_writer_retry_exhausted` | Server returns 500 always | After 3 retries, entries logged as failed (stderr check) |
+
+**Kafka writer (test block skipped if no broker available):**
+
+| Test | Scenario | Validation |
+|------|----------|------------|
+| `test_kafka_config_deser` | Full Kafka output config YAML | All fields deserialize correctly |
+| `test_kafka_writer_connect_failure` | Invalid broker address | Returns error on construction |
+| `test_kafka_writer_produce` | Valid broker, 10 entries, `batch_size: 5` | (integration, requires Kafka) 10 messages produced to topic |
+
+**File rotation:**
+
+| Test | Scenario | Validation |
+|------|----------|------------|
+| `test_file_append_mode` | Write to file with `append: false` (truncate) | Only new entries present |
+| `test_file_rotation` | `rotate_bytes: 100`, write 200 bytes | `output.log` exists (new file) and `output.log.1` exists (rotated) |
+| `test_file_rotation_single_entry` | `rotate_bytes: 1000`, write 1 small entry | No rotation occurs, only `output.log` |
+
+**Shell completions:**
+
+| Test | Scenario | Validation |
+|------|----------|------------|
+| `test_completions_subcommand_exists` | Parse `Cli` with `completions bash` | Subcommand parsed, shell value is `"bash"` |
+| `test_completions_bash_output` | Run completions subcommand with `bash` | Output contains `_loggen()` bash function |
+| `test_completions_zsh_output` | Run completions subcommand with `zsh` | Output contains `#compdef _loggen` |
+
+**Config validation (`--validate`):**
+
+| Test | Scenario | Validation |
+|------|----------|------------|
+| `test_validate_valid_config` | Valid config file + `--validate` | Exit code 0, success message to stderr |
+| `test_validate_unknown_var` | Config with `{{ nonexistent }}` + `--validate` | Exit code 1, error message mentions `nonexistent` |
+| `test_validate_http_no_url` | `target: "http"` without `url` + `--validate` | Exit code 1, error about missing URL |
+| `test_validate_threshold_no_threshold` | Attack `type: threshold_field` without `threshold` block | Exit code 1, error about missing threshold |
+| `test_validate_multi_no_sequence` | Attack `type: multi_ordered` without `sequence` | Exit code 1, error about missing sequence |
+
+**Performance benchmarks (criterion, `benches/` directory):**
+
+| Benchmark | Input | Expectation |
+|-----------|-------|-------------|
+| `bench_legacy_100k` | Legacy mode, 100K entries | Throughput ≥ 500K/s |
+| `bench_template_simple_100k` | 1 template with 2 static vars, 100K entries | Throughput ≥ 300K/s |
+| `bench_template_random_100k` | 1 template with `ip`, `status`, `user_agent`, 100K entries | Throughput ≥ 100K/s |
+| `bench_parallel_500k` | 4 templates, `random_intensity: 1.0`, 500K entries | Throughput ≥ 200K/s |
+| `bench_attack_single_50k` | 1 `single_event` attack, 3 random vars, 50K entries | Throughput ≥ 80K/s |
+
+### 4.8 Dependency Additions
+
+| Crate | Version | Features | Used By |
+|-------|---------|----------|---------|
+| `ureq` | `2` | (default) | `HttpWriter` |
+| `rdkafka` | `0.37` | `base` | `KafkaWriter` |
+| `clap_complete` | `4` | (default) | Shell completions |
+
+`indicatif` was considered for progress bars but rejected due to terminal-width complexity. The simple line-based reporter is more robust for pipe/redirect scenarios.
+
+### 4.10 Required Updates to Existing Code
+
+#### `src/output.rs`
+- `FileWriter::new()` signature changes to accept `truncate: bool` and `rotate_bytes: Option<u64>`.
+- `StdoutWriter` wrapped in `BufferedLogWriter` by `create_writer` (no struct changes needed).
+- New public types: `BufferedLogWriter<W>`, `HttpWriter`, `KafkaWriter`, `ProgressReporter`.
+
+#### `src/config.rs`
+- `OutputConfig` gains all fields from §4.4. New default functions: `default_output_format`, `default_append`, `default_kafka_brokers`, `default_kafka_acks`, `default_kafka_timeout`, `default_kafka_batch`, `default_progress_interval`.
+- New struct `KafkaOutputConfig` with serde derives.
+- `Config` gains `num_threads`, `progress`, `progress_interval`.
+- `Config::default()` updated to include new fields.
+
+#### `src/cli.rs`
+- `create_writer()` restructured per §4.6 factory pseudocode.
+- `parse_attack_spec`, `merge_cli_attacks`, `load_attack_config_file`, `apply_cli_args` unchanged.
+- New validation functions: `validate_http_config`, `validate_kafka_config`.
+
+#### `src/generator.rs`
+- `generate_to_writer()` and streaming methods integrate `ProgressReporter` checks.
+- No structural changes to core generate/attack logic.
+- Timestamp caching: compute `ts_to_rfc3339(current_timestamp())` once before loops in `write_template_stream`, `write_legacy_stream`.
+
+#### `src/main.rs`
+- `Cli` gains `Completions` subcommand.
+- `Generate` gains `--validate`, `--progress`, `--no-progress`, `--threads` flags.
+- `handle_generate` updated to pass new flags, handle `--validate` early exit, configure rayon threads.
+- `handle_http` / `handle_kafka` updated to construct config and call `generate_to_writer` instead of printing stubs.
+- New `handle_completions` function.
+
+### 4.9 Implementation Order
+
+1. **BufferedLogWriter + progress reporting** — no new deps, can be done first.
+2. **File rotation + append mode** — no new deps, modifies `FileWriter`.
+3. **CLI validation (`--validate`)** — no new deps, adds validation logic.
+4. **HttpWriter** — requires `ureq` dep.
+5. **KafkaWriter** — requires `rdkafka` dep.
+6. **Shell completions** — requires `clap_complete` dep.
+7. **Help system examples** — pure CLI text, no deps.
+8. **Performance benchmarks** — requires `criterion` dev-dep.
+9. **Integration tests** — throughout the phase, as each component is built.
 
 ## Phase 5: Documentation & Testing (Weeks 9-10)
 
