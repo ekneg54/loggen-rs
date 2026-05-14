@@ -1,0 +1,25 @@
+# loggen example: SQL injection probe attack pattern
+# Simulates an attacker probing for SQL injection vulnerabilities.
+# Uses multi_ordered to send progressively more aggressive SQL metacharacters in sequence.
+# Usage: cargo run -- generate --config=examples/attack-sqli-probe.yaml
+output:
+  target: stdout
+
+count: 50
+log_level: INFO
+
+attacks:
+  - name: sqli-probe
+    type: multi_ordered
+    sequence:
+      - '{{ ipv4 }} - - [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}] "GET /products?id=1 HTTP/1.1" 500 {{ port }} "-" "{{ user_agent }}"'
+      - '{{ ipv4 }} - - [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}] "GET /products?id=1%27%20OR%20%271%27%3D%271 HTTP/1.1" 500 {{ port }} "-" "{{ user_agent }}"'
+      - '{{ ipv4 }} - - [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}] "GET /products?id=1%20UNION%20SELECT%20*%20FROM%20users HTTP/1.1" 200 {{ port }} "-" "{{ user_agent }}"'
+      - '{{ ipv4 }} - - [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}] "GET /products?id=1%3B%20DROP%20TABLE%20users%20-- HTTP/1.1" 500 {{ port }} "-" "{{ user_agent }}"'
+    count: 50
+    repeat: loop
+    interleave: false
+    vars:
+      ipv4:
+        values: ["203.0.113.50"]
+        mode: cycle

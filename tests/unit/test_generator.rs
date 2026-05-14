@@ -15,6 +15,8 @@ fn test_config() -> Config {
         random_vars: None,
         random_intensity: 1.0,
         template_rotation: "sequential".to_string(),
+        attacks: None,
+        attack_only: false,
     }
 }
 
