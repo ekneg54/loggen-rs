@@ -1,2 +1,2 @@
-<{{ status }}> {{ timestamp | date(format="%b %d %H:%M:%S") }} {{ ip }} {{ email }}: {{ message }}
-<{{ status }}> {{ timestamp | date(format="%b %d %H:%M:%S") }} {{ ip }} {{ email }}: {{ message }}
+<{{ status }}> {{ timestamp | date(format="%b %d %H:%M:%S") }} {{ ipv4 }} {{ email }}: {{ message }}
+<{{ status }}> {{ timestamp | date(format="%b %d %H:%M:%S") }} {{ ipv4 }} {{ email }}: {{ message }}

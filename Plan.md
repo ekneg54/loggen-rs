@@ -26,8 +26,8 @@
 ### 2.1 Template Engine Implementation
 
 **Config changes:**
-- Add optional `logs: Vec<String>` field to `Config` — each string is an inline template. If `logs` or `logs_dir` are set, `message`/`log_level` are ignored (templates take over). If neither is set, fall back to Phase 1 behavior (backwards compatible).
-- Add optional `logs_dir: String` field — path to a directory of `.logtpl` template files. The files are red line by line and every line is a log entry with its jinja template variables. Each file contains one or a set of log entry with template variables.
+- Add optional `logs: Vec<String>` field to `Config` — each string is an inline template. If `logs` or `templates` are set, `message`/`log_level` are ignored (templates take over). If neither is set, fall back to Phase 1 behavior (backwards compatible).
+- Add optional `templates: String` field — path to a directory of `.logtpl` template files. The files are red line by line and every line is a log entry with its jinja template variables. Each file contains one or a set of log entry with template variables.
 - Add optional `template_vars: HashMap<String, String>` field — static variable definitions in YAML (e.g. `template_vars: { app_name: "myapp", host: "web01" }`).
 - Add optional `seed: u64` for reproducible random generation.
 
@@ -45,10 +45,10 @@
 **CLI additions:**
 - Add `--var key=value` (repeatable) for arbitrary template variables.
 - `--message` still works and maps to `{{ message }}`.
-- Add `--logs_dir` option to reflect the config changes in cli 
+- Add `--templates` option to reflect the config changes in cli 
 
 **Pipeline changes (`generator.rs`):**
-- `Generator::generate()` loads templates from `config.logs` or files in `config.logs_dir`, or falls back to legacy single-template (`message`/`log_level`) behavior.
+- `Generator::generate()` loads templates from `config.logs` or files in `config.templates`, or falls back to legacy single-template (`message`/`log_level`) behavior.
 - Creates a Tera instance, registers all templates, validates all referenced variables against the merged variable set.
 - For each of `count` entries: pick template per rotation strategy, render with current variables, produce an output string.
 - `LogEntry.message` holds the fully rendered template string; `write_entry` writes it directly.
@@ -57,12 +57,14 @@
 
 **Built-in random variable generators:**
 Certain variable names trigger automatic random generation if not explicitly set by the user:
-- `{{ ip }}` → random IPv4
+- `{{ ipv4 }}` → random IPv4
+- `{{ ipv6 }}` → random IPv6
 - `{{ user_agent }}` → random UA string from a built-in list
 - `{{ email }}` → random email
 - `{{ url }}` → random URL path
 - `{{ port }}` → random port number
 - `{{ status }}` → random HTTP status (weighted: 200 most common, then 4xx, 5xx)
+- `{{ user }}` -> random user names
 
 User-defined random pools via config: `random_vars: { codes: [200, 201, 404] }` — a var matching a pool name picks a random element each entry.
 
@@ -81,7 +83,11 @@ User-defined random pools via config: `random_vars: { codes: [200, 201, 404] }` 
 ### 2.3 Default Templates
 - Create `templates/` directory with `.logtpl` files: Apache combined, Nginx combined, Syslog (RFC 3164).
 - Each uses built-in variables to demonstrate usage.
-- Add example configs referencing them via `logs_dir`.
+- Add example configs referencing them via `templates`.
+
+### 2.4 Concurrent design
+- the app should be able to produce high load through concurrency via tokio or rayon
+- the app should be memory efficient by not render all in memory and then give to output. instead it should be a stream process that first read all templates, and then produces the output with applied templates
 
 ### Dependency additions
 - `tera` (replaces `handlebars`)

@@ -39,3 +39,13 @@ cargo run -- generate [--count N]    # run binary
 
 - Tests exist inline (`#[cfg(test)]` in `src/config.rs`, `src/generator.rs`, `src/output.rs`) and as integration tests (`tests/`).
 - Tests write to CWD (no `tempfile` crate): `test_config.yaml`, `test_config_unit.yaml`, `test_output.log`, `test_new_file.log`, `test_cli_gen.log`, `output.log`.
+
+## Review
+
+- ensure all examples work
+- ensure all examples are outlined in the README.md Usage section
+- ensure all tests run
+- ensure that test coverage is 100%
+- ensure the code is idiomatic rust
+- ensure all code is readable and adhere to clean code principles
+- ensure documentation is complete, accurate, and helpful

@@ -1,3 +1,3 @@
-{{ ip }} - {{ email }} [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S +0000") }}] "GET {{ url }} HTTP/1.1" {{ status }} {{ port }} "-" "{{ user_agent }}" "-"
-{{ ip }} - {{ email }} [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S +0000") }}] "POST {{ url }} HTTP/1.1" {{ status }} {{ port }} "-" "{{ user_agent }}" "-"
-{{ ip }} - {{ email }} [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S +0000") }}] "HEAD {{ url }} HTTP/1.1" {{ status }} {{ port }} "-" "{{ user_agent }}" "-"
+{{ ipv4 }} - {{ email }} [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S +0000") }}] "GET {{ url }} HTTP/1.1" {{ status }} {{ port }} "-" "{{ user_agent }}" "-"
+{{ ipv4 }} - {{ email }} [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S +0000") }}] "POST {{ url }} HTTP/1.1" {{ status }} {{ port }} "-" "{{ user_agent }}" "-"
+{{ ipv4 }} - {{ email }} [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S +0000") }}] "HEAD {{ url }} HTTP/1.1" {{ status }} {{ port }} "-" "{{ user_agent }}" "-"

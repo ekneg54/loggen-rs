@@ -8,11 +8,29 @@ pub trait LogWriter {
     fn flush(&mut self) -> Result<(), Box<dyn std::error::Error>>;
 }
 
-pub struct StdoutWriter;
+pub struct StdoutWriter {
+    pub template_mode: bool,
+}
+
+impl StdoutWriter {
+    pub fn new() -> Self {
+        StdoutWriter { template_mode: false }
+    }
+}
+
+impl Default for StdoutWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl LogWriter for StdoutWriter {
     fn write_entry(&mut self, entry: &LogEntry) -> Result<(), Box<dyn std::error::Error>> {
-        println!("[{}] [{}] {}", entry.timestamp, entry.level, entry.message);
+        if self.template_mode {
+            println!("{}", entry.message);
+        } else {
+            println!("[{}] [{}] {}", entry.timestamp, entry.level, entry.message);
+        }
         Ok(())
     }
 
@@ -24,6 +42,7 @@ impl LogWriter for StdoutWriter {
 pub struct FileWriter {
     file: File,
     path: String,
+    pub template_mode: bool,
 }
 
 impl FileWriter {
@@ -35,6 +54,7 @@ impl FileWriter {
         Ok(FileWriter {
             file,
             path: path.to_string(),
+            template_mode: false,
         })
     }
 
@@ -45,7 +65,11 @@ impl FileWriter {
 
 impl LogWriter for FileWriter {
     fn write_entry(&mut self, entry: &LogEntry) -> Result<(), Box<dyn std::error::Error>> {
-        writeln!(self.file, "[{}] [{}] {}", entry.timestamp, entry.level, entry.message)?;
+        if self.template_mode {
+            writeln!(self.file, "{}", entry.message)?;
+        } else {
+            writeln!(self.file, "[{}] [{}] {}", entry.timestamp, entry.level, entry.message)?;
+        }
         Ok(())
     }
 
@@ -71,15 +95,50 @@ mod tests {
 
     #[test]
     fn test_stdout_writer_write() {
-        let mut writer = StdoutWriter;
+        let mut writer = StdoutWriter::new();
         let entry = test_entry();
         assert!(writer.write_entry(&entry).is_ok());
     }
 
     #[test]
     fn test_stdout_writer_flush() {
-        let mut writer = StdoutWriter;
+        let mut writer = StdoutWriter::new();
         assert!(writer.flush().is_ok());
+    }
+
+    #[test]
+    fn test_stdout_writer_template_mode() {
+        let mut writer = StdoutWriter { template_mode: true };
+        let entry = LogEntry {
+            timestamp: "12345".to_string(),
+            level: "INFO".to_string(),
+            message: "test message".to_string(),
+        };
+        assert!(writer.write_entry(&entry).is_ok());
+    }
+
+    #[test]
+    fn test_file_writer_template_mode() {
+        let path = "test_template_mode.log";
+        {
+            let mut writer = FileWriter::new(path).unwrap();
+            writer.template_mode = true;
+            let entry = LogEntry {
+                timestamp: "12345".to_string(),
+                level: "INFO".to_string(),
+                message: "template output only".to_string(),
+            };
+            writer.write_entry(&entry).unwrap();
+            writer.flush().unwrap();
+        }
+        let mut content = String::new();
+        std::fs::File::open(path)
+            .unwrap()
+            .read_to_string(&mut content)
+            .unwrap();
+        assert!(!content.contains("[12345]"));
+        assert!(content.contains("template output only"));
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

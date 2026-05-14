@@ -44,7 +44,7 @@ pub struct Config {
     #[serde(default)]
     pub logs: Option<Vec<String>>,
     #[serde(default)]
-    pub logs_dir: Option<String>,
+    pub templates: Option<String>,
     #[serde(default)]
     pub template_vars: Option<HashMap<String, String>>,
     #[serde(default)]
@@ -85,7 +85,7 @@ impl Default for Config {
             log_level: default_log_level(),
             message: default_message(),
             logs: None,
-            logs_dir: None,
+            templates: None,
             template_vars: None,
             seed: None,
             random_vars: None,
@@ -98,6 +98,10 @@ impl Default for Config {
 impl Config {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
         read_yaml_file(path)
+    }
+
+    pub fn has_templates(&self) -> bool {
+        self.logs.as_ref().map_or(false, |v| !v.is_empty()) || self.templates.is_some()
     }
 }
 
@@ -126,7 +130,7 @@ mod tests {
         assert_eq!(config.output.target, "stdout");
         assert!(config.output.path.is_none());
         assert!(config.logs.is_none());
-        assert!(config.logs_dir.is_none());
+        assert!(config.templates.is_none());
         assert!(config.template_vars.is_none());
         assert!(config.seed.is_none());
         assert!(config.random_vars.is_none());
@@ -157,8 +161,8 @@ message: test error
         let yaml = r#"
 count: 5
 logs:
-  - "{{ ip }} - {{ status }}"
-logs_dir: /tmp/logs
+  - "{{ ipv4 }} - {{ status }}"
+templates: /tmp/logs
 template_vars:
   app: myapp
 seed: 42
@@ -169,8 +173,8 @@ template_rotation: round_robin
 "#;
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.count, 5);
-        assert_eq!(config.logs, Some(vec!["{{ ip }} - {{ status }}".to_string()]));
-        assert_eq!(config.logs_dir, Some("/tmp/logs".to_string()));
+        assert_eq!(config.logs, Some(vec!["{{ ipv4 }} - {{ status }}".to_string()]));
+        assert_eq!(config.templates, Some("/tmp/logs".to_string()));
         let vars = config.template_vars.unwrap();
         assert_eq!(vars.get("app").unwrap(), "myapp");
         assert_eq!(config.seed, Some(42));

@@ -40,9 +40,9 @@ enum Commands {
         #[arg(long = "var", value_name = "KEY=VALUE", action = clap::ArgAction::Append)]
         var: Vec<String>,
 
-        /// Directory containing .logtpl template files
-        #[arg(long = "logs-dir", value_name = "DIR")]
-        logs_dir: Option<String>,
+        /// Template file or directory containing .logtpl template files
+        #[arg(long = "templates", value_name = "PATH")]
+        templates: Option<String>,
     },
 
     /// Send logs to an HTTP endpoint (not yet implemented)
@@ -89,14 +89,18 @@ fn handle_generate(
     level: Option<String>,
     message: Option<String>,
     var: Vec<String>,
-    logs_dir: Option<String>,
+    templates: Option<String>,
 ) {
     let cli_vars = parse_var_args(var);
     let base = load_base_config(config_path);
-    let config = apply_cli_args(base, output, count, level, message, cli_vars, logs_dir);
+    let config = apply_cli_args(base, output, count, level, message, cli_vars, templates);
     let generator = Generator::new(config);
     let entries = generator.generate();
-    let mut writer = create_writer(generator.config());
+    let mut writer = create_writer(generator.config())
+        .unwrap_or_else(|e| {
+            eprintln!("Error: failed to create output writer: {}", e);
+            std::process::exit(1);
+        });
     write_entries(&mut writer, &entries);
 }
 
@@ -124,8 +128,8 @@ fn main() {
             level,
             message,
             var,
-            logs_dir,
-        }) => handle_generate(cli.config.as_ref(), output, count, level, message, var, logs_dir),
+            templates,
+        }) => handle_generate(cli.config.as_ref(), output, count, level, message, var, templates),
         Some(Commands::Http { url }) => handle_http(url),
         Some(Commands::Kafka { kafkaconfig }) => handle_kafka(kafkaconfig),
         None => {

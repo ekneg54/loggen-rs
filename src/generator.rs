@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::rngs::StdRng;
@@ -12,7 +13,11 @@ use tera::{Context, Tera};
 use crate::config::{Config, LogEntry};
 
 const BUILTIN_VARS: &[&str] = &["timestamp", "level", "index", "message"];
-const AUTO_RANDOM_VARS: &[&str] = &["ip", "user_agent", "email", "url", "port", "status"];
+const AUTO_RANDOM_VARS: &[&str] = &["ip", "ipv4", "ipv6", "user_agent", "email", "url", "port", "status", "user"];
+
+static RE_TEMPLATE_VAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{\s*(\w+)").unwrap());
+static RE_IF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\%\s*if\s+(\w+)").unwrap());
+static RE_FOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\%\s*for\s+\w+\s+in\s+(\w+)").unwrap());
 
 fn current_timestamp() -> u64 {
     SystemTime::now()
@@ -21,8 +26,26 @@ fn current_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
-fn random_ip(rng: &mut StdRng) -> String {
+fn random_ipv4(rng: &mut StdRng) -> String {
     format!("{}.{}.{}.{}", rng.gen_range(1..255), rng.gen_range(0..256), rng.gen_range(0..256), rng.gen_range(1..255))
+}
+
+fn random_ipv6(rng: &mut StdRng) -> String {
+    format!("{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
+        rng.gen_range(0x0..0x10000),
+        rng.gen_range(0x0..0x10000),
+        rng.gen_range(0x0..0x10000),
+        rng.gen_range(0x0..0x10000),
+        rng.gen_range(0x0..0x10000),
+        rng.gen_range(0x0..0x10000),
+        rng.gen_range(0x0..0x10000),
+        rng.gen_range(0x0..0x10000),
+    )
+}
+
+fn random_user(rng: &mut StdRng) -> String {
+    let users = ["alice", "bob", "charlie", "dave", "eve", "frank", "grace", "henry", "admin", "jenny", "karl", "liam", "mia", "nina", "oscar"];
+    users.choose(rng).unwrap().to_string()
 }
 
 fn random_user_agent(rng: &mut StdRng) -> String {
@@ -82,20 +105,17 @@ fn random_status(rng: &mut StdRng) -> u16 {
 
 fn extract_template_vars(template: &str) -> BTreeSet<String> {
     let mut vars = BTreeSet::new();
-    let re_var = Regex::new(r"\{\{\s*(\w+)").unwrap();
-    for cap in re_var.captures_iter(template) {
+    for cap in RE_TEMPLATE_VAR.captures_iter(template) {
         if let Some(var) = cap.get(1) {
             vars.insert(var.as_str().to_string());
         }
     }
-    let re_if = Regex::new(r"\{\%\s*if\s+(\w+)").unwrap();
-    for cap in re_if.captures_iter(template) {
+    for cap in RE_IF.captures_iter(template) {
         if let Some(var) = cap.get(1) {
             vars.insert(var.as_str().to_string());
         }
     }
-    let re_for = Regex::new(r"\{\%\s*for\s+\w+\s+in\s+(\w+)").unwrap();
-    for cap in re_for.captures_iter(template) {
+    for cap in RE_FOR.captures_iter(template) {
         if let Some(var) = cap.get(1) {
             vars.insert(var.as_str().to_string());
         }
@@ -109,32 +129,44 @@ fn load_templates_from_config(config: &Config) -> Result<Vec<String>, String> {
             return Ok(logs.clone());
         }
     }
-    if let Some(ref dir) = config.logs_dir {
-        let dir_path = Path::new(dir);
-        if !dir_path.is_dir() {
-            return Err(format!("logs_dir '{}' is not a directory or does not exist", dir));
-        }
-        let mut templates = Vec::new();
-        let mut entries: Vec<_> = fs::read_dir(dir_path)
-            .map_err(|e| format!("failed to read logs_dir '{}': {}", dir, e))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "logtpl"))
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            let content = fs::read_to_string(entry.path())
-                .map_err(|e| format!("failed to read '{}': {}", entry.path().display(), e))?;
-            for line in content.lines() {
-                let line = line.trim();
-                if !line.is_empty() {
-                    templates.push(line.to_string());
+    if let Some(ref path_str) = config.templates {
+        let path = Path::new(path_str);
+        if path.is_file() {
+            let content = fs::read_to_string(path)
+                .map_err(|e| format!("failed to read template file '{}': {}", path_str, e))?;
+            let templates: Vec<String> = content.lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            if templates.is_empty() {
+                return Err(format!("no templates found in '{}'", path_str));
+            }
+            return Ok(templates);
+        } else if path.is_dir() {
+            let mut templates = Vec::new();
+            let mut entries: Vec<_> = fs::read_dir(path)
+                .map_err(|e| format!("failed to read directory '{}': {}", path_str, e))?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |ext| ext == "logtpl"))
+                .collect();
+            entries.sort_by_key(|e| e.file_name());
+            for entry in entries {
+                let content = fs::read_to_string(entry.path())
+                    .map_err(|e| format!("failed to read '{}': {}", entry.path().display(), e))?;
+                for line in content.lines() {
+                    let line = line.trim();
+                    if !line.is_empty() {
+                        templates.push(line.to_string());
+                    }
                 }
             }
+            if templates.is_empty() {
+                return Err(format!("no templates found in directory '{}'", path_str));
+            }
+            return Ok(templates);
+        } else {
+            return Err(format!("'{}' is not a file or directory", path_str));
         }
-        if templates.is_empty() {
-            return Err(format!("no templates found in logs_dir '{}'", dir));
-        }
-        return Ok(templates);
     }
     Err("no templates configured".to_string())
 }
@@ -177,13 +209,15 @@ fn generate_random_value(
         }
     }
     match var_name {
-        "ip" => random_ip(rng),
+        "ip" | "ipv4" => random_ipv4(rng),
+        "ipv6" => random_ipv6(rng),
         "user_agent" => random_user_agent(rng),
         "email" => random_email(rng),
         "url" => random_url(rng),
         "port" => random_port(rng).to_string(),
         "status" => random_status(rng).to_string(),
-        _ => String::new(),
+        "user" => random_user(rng),
+        _ => format!("<missing-generator:{}>", var_name),
     }
 }
 
@@ -220,8 +254,6 @@ impl Generator {
                 .map(|d| d.as_nanos() as u64)
                 .unwrap_or(0)
         });
-        let _rng = StdRng::seed_from_u64(seed);
-
         let (templates, tera) = match load_templates_from_config(&config) {
             Ok(tpls) => {
                 let template_vars = config.template_vars.clone().unwrap_or_default();
@@ -236,7 +268,8 @@ impl Generator {
                 }
                 (tpls, tera)
             }
-            Err(_) => {
+            Err(e) => {
+                eprintln!("Warning: template loading failed (falling back to legacy mode): {}", e);
                 (Vec::new(), Tera::default())
             }
         };
@@ -382,7 +415,7 @@ mod tests {
             log_level: "INFO".to_string(),
             message: "test".to_string(),
             logs: None,
-            logs_dir: None,
+            templates: None,
             template_vars: None,
             seed: None,
             random_vars: None,
@@ -497,7 +530,7 @@ mod tests {
     fn test_template_random_vars_resolve() {
         let config = Config {
             count: 5,
-            logs: Some(vec!["{{ ip }} - {{ status }}".to_string()]),
+            logs: Some(vec!["{{ ipv4 }} - {{ status }}".to_string()]),
             ..test_config()
         };
         let generator = Generator::new(config);

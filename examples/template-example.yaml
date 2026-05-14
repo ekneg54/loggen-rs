@@ -9,8 +9,8 @@ log_level: INFO
 message: "Sample log event"
 
 logs:
-  - "{{ ip }} - {{ email }} [{{ timestamp | date(format='%d/%b/%Y:%H:%M:%S +0000') }}] {{ url }} {{ status }} {{ port }}"
-  - "{{ level }} | {{ ip }} | {{ user_agent }} | {{ message }}"
+  - "{{ ipv4 }} - {{ email }} [{{ timestamp | date(format='%d/%b/%Y:%H:%M:%S +0000') }}] {{ url }} {{ status }} {{ port }}"
+  - "{{ level }} | {{ ipv4 }} | {{ user_agent }} | {{ message }}"
 
 template_vars:
   app_name: loggen

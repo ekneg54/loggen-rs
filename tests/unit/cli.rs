@@ -78,7 +78,7 @@ fn test_apply_cli_args_overrides_output_when_given() {
 #[test]
 fn test_create_writer_stdout_target() {
     let config = Config::default();
-    let _ = create_writer(&config);
+    let _ = create_writer(&config).unwrap();
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn test_create_writer_file_target() {
         },
         ..Config::default()
     };
-    let mut writer = create_writer(&config);
+    let mut writer = create_writer(&config).unwrap();
     let entry = LogEntry {
         timestamp: "100".into(),
         level: "WARN".into(),
@@ -118,7 +118,7 @@ fn test_create_writer_file_default_path() {
         },
         ..Config::default()
     };
-    let mut writer = create_writer(&config);
+    let mut writer = create_writer(&config).unwrap();
     let entry = LogEntry {
         timestamp: "0".into(),
         level: "INFO".into(),
@@ -139,7 +139,7 @@ fn test_create_writer_file_default_path() {
 
 #[test]
 fn test_write_entries_multiple_entries() {
-    let mut writer: Box<dyn LogWriter> = Box::new(StdoutWriter);
+    let mut writer: Box<dyn LogWriter> = Box::new(StdoutWriter::new());
     let entries = vec![
         LogEntry {
             timestamp: "1".into(),
@@ -162,6 +162,6 @@ fn test_write_entries_multiple_entries() {
 
 #[test]
 fn test_write_entries_empty() {
-    let mut writer: Box<dyn LogWriter> = Box::new(StdoutWriter);
+    let mut writer: Box<dyn LogWriter> = Box::new(StdoutWriter::new());
     write_entries(&mut writer, &[]);
 }

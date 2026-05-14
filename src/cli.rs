@@ -25,7 +25,7 @@ pub fn apply_cli_args(
     level: Option<String>,
     message: Option<String>,
     var: HashMap<String, String>,
-    logs_dir: Option<String>,
+    templates: Option<String>,
 ) -> Config {
     if let Some(c) = count {
         config.count = c;
@@ -53,20 +53,23 @@ pub fn apply_cli_args(
         config.template_vars = Some(merged);
     }
 
-    // CLI --logs-dir overrides config file
-    if logs_dir.is_some() {
-        config.logs_dir = logs_dir;
+    // CLI --templates overrides config file
+    if templates.is_some() {
+        config.templates = templates;
     }
 
     config
 }
 
-pub fn create_writer(config: &Config) -> Box<dyn LogWriter> {
+pub fn create_writer(config: &Config) -> Result<Box<dyn LogWriter>, Box<dyn std::error::Error>> {
+    let template_mode = config.has_templates();
     if config.output.target == "file" {
         let path = config.output.path.as_deref().unwrap_or("output.log");
-        Box::new(FileWriter::new(path).unwrap())
+        let mut writer = FileWriter::new(path)?;
+        writer.template_mode = template_mode;
+        Ok(Box::new(writer))
     } else {
-        Box::new(StdoutWriter)
+        Ok(Box::new(StdoutWriter { template_mode }))
     }
 }
 
