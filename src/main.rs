@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -24,16 +25,24 @@ enum Commands {
         output: Option<String>,
 
         /// Number of log entries to generate
-        #[arg(short = 'n', long, default_value_t = 1)]
-        count: u64,
+        #[arg(short = 'n', long)]
+        count: Option<u64>,
 
         /// Log level
-        #[arg(short, long, default_value = "INFO")]
-        level: String,
+        #[arg(short, long)]
+        level: Option<String>,
 
         /// Log message
-        #[arg(short, long, default_value = "Log entry generated")]
-        message: String,
+        #[arg(short, long)]
+        message: Option<String>,
+
+        /// Template variable (repeatable, KEY=VALUE)
+        #[arg(long = "var", value_name = "KEY=VALUE", action = clap::ArgAction::Append)]
+        var: Vec<String>,
+
+        /// Directory containing .logtpl template files
+        #[arg(long = "logs-dir", value_name = "DIR")]
+        logs_dir: Option<String>,
     },
 
     /// Send logs to an HTTP endpoint (not yet implemented)
@@ -61,9 +70,30 @@ fn try_show_completion_help() -> Option<clap::Command> {
     cmd.find_subcommand_mut(subcmd_name).cloned()
 }
 
-fn handle_generate(config_path: Option<&PathBuf>, output: Option<String>, count: u64, level: String, message: String) {
+fn parse_var_args(var: Vec<String>) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for pair in var {
+        if let Some((k, v)) = pair.split_once('=') {
+            map.insert(k.to_string(), v.to_string());
+        } else {
+            eprintln!("Warning: ignoring malformed --var '{}' (expected KEY=VALUE)", pair);
+        }
+    }
+    map
+}
+
+fn handle_generate(
+    config_path: Option<&PathBuf>,
+    output: Option<String>,
+    count: Option<u64>,
+    level: Option<String>,
+    message: Option<String>,
+    var: Vec<String>,
+    logs_dir: Option<String>,
+) {
+    let cli_vars = parse_var_args(var);
     let base = load_base_config(config_path);
-    let config = apply_cli_args(base, output, count, level, message);
+    let config = apply_cli_args(base, output, count, level, message, cli_vars, logs_dir);
     let generator = Generator::new(config);
     let entries = generator.generate();
     let mut writer = create_writer(generator.config());
@@ -93,7 +123,9 @@ fn main() {
             count,
             level,
             message,
-        }) => handle_generate(cli.config.as_ref(), output, count, level, message),
+            var,
+            logs_dir,
+        }) => handle_generate(cli.config.as_ref(), output, count, level, message, var, logs_dir),
         Some(Commands::Http { url }) => handle_http(url),
         Some(Commands::Kafka { kafkaconfig }) => handle_kafka(kafkaconfig),
         None => {

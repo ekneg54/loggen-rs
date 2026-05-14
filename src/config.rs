@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::{fs::File, io::Read, path::Path};
 use serde::Deserialize;
 
@@ -38,6 +39,22 @@ pub struct Config {
     pub log_level: String,
     #[serde(default = "default_message")]
     pub message: String,
+
+    // Phase 2: Template System
+    #[serde(default)]
+    pub logs: Option<Vec<String>>,
+    #[serde(default)]
+    pub logs_dir: Option<String>,
+    #[serde(default)]
+    pub template_vars: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub random_vars: Option<HashMap<String, Vec<String>>>,
+    #[serde(default = "default_random_intensity")]
+    pub random_intensity: f64,
+    #[serde(default = "default_template_rotation")]
+    pub template_rotation: String,
 }
 
 fn default_count() -> u64 {
@@ -52,6 +69,14 @@ fn default_message() -> String {
     "Log entry generated".to_string()
 }
 
+fn default_random_intensity() -> f64 {
+    1.0
+}
+
+fn default_template_rotation() -> String {
+    "sequential".to_string()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -59,6 +84,13 @@ impl Default for Config {
             count: default_count(),
             log_level: default_log_level(),
             message: default_message(),
+            logs: None,
+            logs_dir: None,
+            template_vars: None,
+            seed: None,
+            random_vars: None,
+            random_intensity: default_random_intensity(),
+            template_rotation: default_template_rotation(),
         }
     }
 }
@@ -93,6 +125,13 @@ mod tests {
         assert_eq!(config.message, "Log entry generated");
         assert_eq!(config.output.target, "stdout");
         assert!(config.output.path.is_none());
+        assert!(config.logs.is_none());
+        assert!(config.logs_dir.is_none());
+        assert!(config.template_vars.is_none());
+        assert!(config.seed.is_none());
+        assert!(config.random_vars.is_none());
+        assert_eq!(config.random_intensity, 1.0);
+        assert_eq!(config.template_rotation, "sequential");
     }
 
     #[test]
@@ -111,6 +150,34 @@ message: test error
         assert_eq!(config.count, 10);
         assert_eq!(config.log_level, "ERROR");
         assert_eq!(config.message, "test error");
+    }
+
+    #[test]
+    fn test_config_yaml_with_templates() {
+        let yaml = r#"
+count: 5
+logs:
+  - "{{ ip }} - {{ status }}"
+logs_dir: /tmp/logs
+template_vars:
+  app: myapp
+seed: 42
+random_vars:
+  codes: [200, 404, 500]
+random_intensity: 0.8
+template_rotation: round_robin
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.count, 5);
+        assert_eq!(config.logs, Some(vec!["{{ ip }} - {{ status }}".to_string()]));
+        assert_eq!(config.logs_dir, Some("/tmp/logs".to_string()));
+        let vars = config.template_vars.unwrap();
+        assert_eq!(vars.get("app").unwrap(), "myapp");
+        assert_eq!(config.seed, Some(42));
+        let rv = config.random_vars.unwrap();
+        assert_eq!(rv.get("codes").unwrap(), &vec!["200", "404", "500"]);
+        assert!((config.random_intensity - 0.8).abs() < 1e-6);
+        assert_eq!(config.template_rotation, "round_robin");
     }
 
     #[test]

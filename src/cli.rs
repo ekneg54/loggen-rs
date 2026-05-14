@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::config::OutputConfig;
@@ -17,19 +18,47 @@ pub fn load_base_config(config_path: Option<&PathBuf>) -> Config {
     }
 }
 
-pub fn apply_cli_args(config: Config, output: Option<String>, count: u64, level: String, message: String) -> Config {
-    Config {
-        count,
-        log_level: level,
-        message,
-        output: match output {
-            Some(path) => OutputConfig {
-                target: "file".to_string(),
-                path: Some(path),
-            },
-            None => config.output,
-        },
+pub fn apply_cli_args(
+    mut config: Config,
+    output: Option<String>,
+    count: Option<u64>,
+    level: Option<String>,
+    message: Option<String>,
+    var: HashMap<String, String>,
+    logs_dir: Option<String>,
+) -> Config {
+    if let Some(c) = count {
+        config.count = c;
     }
+    if let Some(l) = level {
+        config.log_level = l;
+    }
+    if let Some(m) = message {
+        config.message = m;
+    }
+    config.output = match output {
+        Some(path) => OutputConfig {
+            target: "file".to_string(),
+            path: Some(path),
+        },
+        None => config.output,
+    };
+
+    // Merge CLI --var into template_vars (CLI takes precedence)
+    let mut merged = config.template_vars.clone().unwrap_or_default();
+    for (k, v) in var {
+        merged.insert(k, v);
+    }
+    if !merged.is_empty() {
+        config.template_vars = Some(merged);
+    }
+
+    // CLI --logs-dir overrides config file
+    if logs_dir.is_some() {
+        config.logs_dir = logs_dir;
+    }
+
+    config
 }
 
 pub fn create_writer(config: &Config) -> Box<dyn LogWriter> {

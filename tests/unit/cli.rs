@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
 
@@ -25,9 +26,11 @@ fn test_apply_cli_args_overrides_all() {
     let config = apply_cli_args(
         Config::default(),
         Some("out.log".into()),
-        99,
-        "ERROR".into(),
-        "test msg".into(),
+        Some(99),
+        Some("ERROR".into()),
+        Some("test msg".into()),
+        HashMap::new(),
+        None,
     );
     assert_eq!(config.count, 99);
     assert_eq!(config.log_level, "ERROR");
@@ -45,7 +48,7 @@ fn test_apply_cli_args_preserves_output_when_not_given() {
         },
         ..Config::default()
     };
-    let config = apply_cli_args(base, None, 1, "INFO".into(), "msg".into());
+    let config = apply_cli_args(base, None, Some(1), Some("INFO".into()), Some("msg".into()), HashMap::new(), None);
     assert_eq!(config.output.target, "file");
     assert_eq!(config.output.path.as_deref(), Some("/orig/path"));
 }
@@ -62,9 +65,11 @@ fn test_apply_cli_args_overrides_output_when_given() {
     let config = apply_cli_args(
         base,
         Some("/new/path".into()),
-        1,
-        "INFO".into(),
-        "msg".into(),
+        Some(1),
+        Some("INFO".into()),
+        Some("msg".into()),
+        HashMap::new(),
+        None,
     );
     assert_eq!(config.output.target, "file");
     assert_eq!(config.output.path.as_deref(), Some("/new/path"));

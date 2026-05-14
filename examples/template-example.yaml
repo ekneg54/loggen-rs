@@ -1,0 +1,20 @@
+# loggen example: template-based generation
+# Usage: cargo run -- generate --config=examples/template-example.yaml
+
+output:
+  target: stdout
+
+count: 10
+log_level: INFO
+message: "Sample log event"
+
+logs:
+  - "{{ ip }} - {{ email }} [{{ timestamp | date(format='%d/%b/%Y:%H:%M:%S +0000') }}] {{ url }} {{ status }} {{ port }}"
+  - "{{ level }} | {{ ip }} | {{ user_agent }} | {{ message }}"
+
+template_vars:
+  app_name: loggen
+  host: web01
+
+random_intensity: 1.0
+template_rotation: round_robin
