@@ -77,6 +77,8 @@ pub struct AttackConfig {
     pub threshold: Option<ThresholdConfig>,
     #[serde(default)]
     pub vars: Option<HashMap<String, AttackVarConfig>>,
+    #[serde(default)]
+    pub common: Option<Vec<String>>,
 }
 
 fn default_attack_weight() -> f64 {
@@ -217,6 +219,9 @@ attacks:
     count: 10
     interleave: true
     weight: 0.3
+    common:
+      - method
+      - path
     vars:
       status:
         values: ["401", "401", "401", "200"]
@@ -245,6 +250,10 @@ attacks:
         assert_eq!(attacks[0].count, Some(10));
         assert!(attacks[0].interleave);
         assert!((attacks[0].weight - 0.3).abs() < 1e-6);
+        let common = attacks[0].common.as_ref().unwrap();
+        assert_eq!(common.len(), 2);
+        assert!(common.contains(&"method".to_string()));
+        assert!(common.contains(&"path".to_string()));
         let vars = attacks[0].vars.as_ref().unwrap();
         assert_eq!(vars["status"].values, vec!["401", "401", "401", "200"]);
         assert_eq!(vars["status"].mode, "weighted");

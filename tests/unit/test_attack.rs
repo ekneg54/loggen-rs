@@ -111,6 +111,7 @@ fn test_single_event_count() {
         repeat: "loop".to_string(),
         threshold: None,
         vars: None,
+        common: None,
     };
     let config = Config {
         attacks: Some(vec![attack]),
@@ -146,6 +147,7 @@ fn test_multi_ordered_sequence_order() {
         repeat: "loop".to_string(),
         threshold: None,
         vars: None,
+        common: None,
     };
     let config = Config {
         attacks: Some(vec![attack]),
@@ -185,6 +187,7 @@ fn test_multi_ordered_once() {
         repeat: "once".to_string(),
         threshold: None,
         vars: None,
+        common: None,
     };
     let config = Config {
         attacks: Some(vec![attack]),
@@ -220,6 +223,7 @@ fn test_threshold_field_proportion() {
             proportion: 0.7,
         }),
         vars: None,
+        common: None,
     };
     let config = Config {
         attacks: Some(vec![attack]),
@@ -275,6 +279,7 @@ fn test_attack_var_override() {
                 mode: "cycle".to_string(),
             },
         )])),
+        common: None,
     };
     let config = Config {
         attacks: Some(vec![attack]),
@@ -313,6 +318,7 @@ fn test_interleaving_total_count() {
                 repeat: "loop".to_string(),
                 threshold: None,
                 vars: None,
+                common: None,
             },
             AttackConfig {
                 name: Some("attack-b".to_string()),
@@ -325,6 +331,7 @@ fn test_interleaving_total_count() {
                 repeat: "loop".to_string(),
                 threshold: None,
                 vars: None,
+                common: None,
             },
         ]),
         ..base_config()
@@ -358,6 +365,7 @@ fn test_attack_only() {
                 repeat: "loop".to_string(),
                 threshold: None,
                 vars: None,
+                common: None,
             },
             AttackConfig {
                 name: Some("b".to_string()),
@@ -370,6 +378,7 @@ fn test_attack_only() {
                 repeat: "loop".to_string(),
                 threshold: None,
                 vars: None,
+                common: None,
             },
         ]),
         attack_only: true,
@@ -405,6 +414,7 @@ fn test_attack_no_interleave_ordering() {
                 repeat: "loop".to_string(),
                 threshold: None,
                 vars: None,
+                common: None,
             },
             AttackConfig {
                 name: Some("second".to_string()),
@@ -417,6 +427,7 @@ fn test_attack_no_interleave_ordering() {
                 repeat: "loop".to_string(),
                 threshold: None,
                 vars: None,
+                common: None,
             },
         ]),
         attack_only: true,
@@ -455,6 +466,7 @@ fn test_attack_var_mode_cycle() {
                 mode: "cycle".to_string(),
             },
         )])),
+        common: None,
     };
     let config = Config {
         attacks: Some(vec![attack]),
@@ -493,6 +505,7 @@ fn test_attack_var_mode_weighted() {
                 mode: "weighted".to_string(),
             },
         )])),
+        common: None,
     };
     let config = Config {
         attacks: Some(vec![attack]),
@@ -569,6 +582,7 @@ fn test_merge_cli_attacks_groups_multi() {
             repeat: "loop".to_string(),
             threshold: None,
             vars: None,
+            common: None,
         },
         AttackConfig {
             name: Some("scan".to_string()),
@@ -581,6 +595,7 @@ fn test_merge_cli_attacks_groups_multi() {
             repeat: "loop".to_string(),
             threshold: None,
             vars: None,
+            common: None,
         },
     ];
     let merged = merge_cli_attacks(attacks);
@@ -606,6 +621,7 @@ fn test_apply_cli_args_with_attacks() {
         repeat: "loop".to_string(),
         threshold: None,
         vars: None,
+        common: None,
     };
     let config = apply_cli_args(
         Config::default(),
@@ -686,6 +702,7 @@ fn test_attack_with_random_intensity_below_one() {
         repeat: "loop".to_string(),
         threshold: None,
         vars: None,
+        common: None,
     };
     let config = Config {
         count: 50,
@@ -721,6 +738,7 @@ fn test_attack_with_legacy_normal() {
         repeat: "loop".to_string(),
         threshold: None,
         vars: None,
+        common: None,
     };
     let config = Config {
         count: 10,
@@ -740,6 +758,76 @@ fn test_attack_with_legacy_normal() {
     }
 }
 
+// ── Parallel fallback when interleave/multi_ordered attacks exist ──
+
+#[test]
+fn test_attack_parallel_fallback() {
+    // With interleaving attacks and random_intensity >= 1.0 the generator
+    // falls back to serial path (no rayon) and produces entries correctly
+    let config = Config {
+        count: 50,
+        logs: Some(vec!["normal-{{ index }}".to_string()]),
+        attacks: Some(vec![AttackConfig {
+            name: Some("interleaved".to_string()),
+            attack_type: "single_event".to_string(),
+            template: Some("attack-{{ index }}".to_string()),
+            sequence: None,
+            count: Some(10),
+            interleave: true,
+            weight: 0.5,
+            repeat: "loop".to_string(),
+            threshold: None,
+            vars: None,
+            common: None,
+        }]),
+        seed: Some(42),
+        random_intensity: 1.0,
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    // 50 normal + 10 attack = 60
+    assert_eq!(entries.len(), 60);
+    let normal_count = entries.iter().filter(|e| e.message.starts_with("normal-")).count();
+    let attack_count = entries.iter().filter(|e| e.message.starts_with("attack-")).count();
+    assert_eq!(normal_count, 50);
+    assert_eq!(attack_count, 10);
+}
+
+#[test]
+fn test_attack_parallel_fallback_multi_ordered() {
+    // With multi_ordered (non-interleaved) attacks and random_intensity >= 1.0,
+    // normal entries still use parallel path, entries produced correctly
+    let config = Config {
+        count: 50,
+        logs: Some(vec!["normal-{{ index }}".to_string()]),
+        attacks: Some(vec![AttackConfig {
+            name: Some("ordered".to_string()),
+            attack_type: "multi_ordered".to_string(),
+            template: None,
+            sequence: Some(vec!["step-A".to_string(), "step-B".to_string()]),
+            count: Some(6),
+            interleave: false,
+            weight: 0.5,
+            repeat: "once".to_string(),
+            threshold: None,
+            vars: None,
+            common: None,
+        }]),
+        seed: Some(42),
+        random_intensity: 1.0,
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    // 50 normal + 2 attack (sequence exhausted at repeat=once) = 52
+    assert_eq!(entries.len(), 52);
+    let normal_count = entries.iter().filter(|e| e.message.starts_with("normal-")).count();
+    let attack_count = entries.iter().filter(|e| e.message.starts_with("step-")).count();
+    assert_eq!(normal_count, 50);
+    assert_eq!(attack_count, 2);
+}
+
 // ── Seeded attack reproducibility ──
 
 #[test]
@@ -755,6 +843,7 @@ fn test_seeded_attack_reproducibility() {
         repeat: "loop".to_string(),
         threshold: None,
         vars: None,
+        common: None,
     };
     let make_config = || Config {
         count: 10,

@@ -14,7 +14,7 @@ attacks:
     # Apache combined log format with brute-force characteristics
     template: '{{ ipv4 }} - - [{{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}] "POST /login HTTP/1.1" {{ status }} {{ port }} "-" "{{ user_agent }}"'
     count: 50
-    interleave: false
+    interleave: true
     vars:
       # Mostly 401, occasional 200 to simulate successful breach
       status:

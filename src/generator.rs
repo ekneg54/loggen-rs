@@ -313,8 +313,11 @@ impl Generator {
                 let attack_var_names: HashSet<String> = attack.vars.as_ref()
                     .map(|v| v.keys().cloned().collect())
                     .unwrap_or_default();
+                let common_names: HashSet<String> = attack.common.as_ref()
+                    .map(|c| c.iter().cloned().collect())
+                    .unwrap_or_default();
                 let mut combined_vars = template_vars.clone();
-                for k in &attack_var_names {
+                for k in attack_var_names.union(&common_names) {
                     combined_vars.entry(k.clone()).or_insert_with(|| "attack_var".to_string());
                 }
                 let combined_random: HashMap<String, Vec<String>> = random_vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -598,6 +601,7 @@ pub struct AttackEngine<'a> {
     pub remaining: Vec<u64>,
     pub threshold_accepted: Vec<u64>,
     pub var_cycles: Vec<HashMap<String, usize>>,
+    pub common_cache: Vec<Option<HashMap<String, String>>>,
 }
 
 impl<'a> AttackEngine<'a> {
@@ -619,6 +623,7 @@ impl<'a> AttackEngine<'a> {
             }).collect(),
             threshold_accepted: vec![0; count],
             var_cycles: vec![HashMap::new(); count],
+            common_cache: vec![None; count],
         }
     }
 
@@ -751,6 +756,29 @@ fn render_attack_entry(
         if should_randomize {
             let val = generate_random_value(var_name, &generator.config, &mut engine.rng);
             ctx_values.insert(var_name.clone(), tera::Value::String(val));
+        }
+    }
+
+    // common fields: freeze their values on first entry, reuse cached values thereafter
+    if let Some(ref common) = attack.common {
+        if engine.common_cache[attack_idx].is_none() {
+            let mut cached = HashMap::new();
+            for name in common {
+                let val = ctx_values.get(name)
+                    .map(|v| match v {
+                        tera::Value::String(s) => s.clone(),
+                        tera::Value::Number(n) => n.to_string(),
+                        _ => String::new(),
+                    })
+                    .unwrap_or_default();
+                cached.insert(name.clone(), val);
+            }
+            engine.common_cache[attack_idx] = Some(cached);
+        }
+        if let Some(ref cached) = engine.common_cache[attack_idx] {
+            for (k, v) in cached {
+                ctx_values.insert(k.clone(), tera::Value::String(v.clone()));
+            }
         }
     }
 
@@ -1013,9 +1041,11 @@ impl Generator {
             let mut engine = AttackEngine::new(attacks, self.seed, count);
             self.write_attack_interleaved(&mut engine, writer)?;
         } else {
-            // Normal streaming first
+            // Normal streaming first (use parallel when random_intensity >= 1.0)
             if self.templates.is_empty() {
                 self.write_legacy_stream(count, writer)?;
+            } else if self.config.random_intensity >= 1.0 {
+                self.write_template_parallel_stream(count, writer)?;
             } else {
                 self.write_template_stream(count, writer)?;
             }

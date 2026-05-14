@@ -213,11 +213,11 @@ AttackEngine {
 
 **Per-type rendering logic:**
 
-- **`single_event`**: Render `attack.template` via Tera. Merge is: (1) global `template_vars`, (2) built-in vars, (3) random vars per `random_intensity`, (4) `attack.vars` on top (strongest override). Each entry is independent. Respects `random_intensity` for non-attack-vars random fields.
+- **`single_event`**: Render `attack.template` via Tera. Merge is: (1) global `template_vars`, (2) built-in vars, (3) random vars per `random_intensity`, (4) `attack.vars` on top (strongest override). Each entry is independent. Respects `random_intensity` for non-attack-vars random fields. The `common` field describes the fields that do not change during attack. the `common` field is a list of fields, that are populated only once by the template engine and do not change during the attack.
 
-- **`multi_ordered`**: Maintain a per-attack `AttackCursor`. Pick template from `sequence[cursor.sequence_index]`, advance cursor by 1. When cursor reaches `sequence.len()`: if `repeat: "once"`, mark attack exhausted (remaining = 0); if `"loop"`, reset cursor to 0. Merge variables in same priority as `single_event`. The cursor tracks per-attack state, so interleaved multi_ordered attacks maintain correct ordering across entry boundaries.
+- **`multi_ordered`**: Maintain a per-attack `AttackCursor`. Pick template from `sequence[cursor.sequence_index]`, advance cursor by 1. When cursor reaches `sequence.len()`: if `repeat: "once"`, mark attack exhausted (remaining = 0); if `"loop"`, reset cursor to 0. Merge variables in same priority as `single_event`. The cursor tracks per-attack state, so interleaved multi_ordered attacks maintain correct ordering across entry boundaries. The `common` field describes the fields that do not change during attack.
 
-- **`threshold_field`**: Render template via Tera (same merge logic). Extract the rendered value of `threshold.field` from the template context — note: the template variable value is known at render time (it's in `ctx_values` before Tera rendering). Use rejection sampling: regenerate the random variable for `threshold.field` up to 10 times until the drawn value falls in the desired bucket. After the required `proportion` of entries are in-bucket, allow remaining entries to fall anywhere (i.e. stop rejecting). If retries exhausted (10 attempts), emit the last rendered value anyway. This ensures the output proportion converges toward the target without risking infinite loops.
+- **`threshold_field`**: Render template via Tera (same merge logic). Extract the rendered value of `threshold.field` from the template context — note: the template variable value is known at render time (it's in `ctx_values` before Tera rendering). Use rejection sampling: regenerate the random variable for `threshold.field` up to 10 times until the drawn value falls in the desired bucket. After the required `proportion` of entries are in-bucket, allow remaining entries to fall anywhere (i.e. stop rejecting). If retries exhausted (10 attempts), emit the last rendered value anyway. This ensures the output proportion converges toward the target without risking infinite loops. The `common` field describes the fields that do not change during attack.
 
 **Interleaving logic (when `interleave: true` on any attack):**
 
@@ -232,9 +232,7 @@ AttackEngine {
 When `interleave: false` globally (all attacks), generate all normal entries first, then all attack entries (in config order, each attack fully completes before the next starts).
 
 **Parallel streaming interaction:**
-- Attack mode **disables** the parallel (`rayon`) path when any attack exists with `interleave: true` or `type: multi_ordered` — ordering cannot be guaranteed under parallel execution.
-- For `threshold_field` or `single_event` with `interleave: false`, the serial streaming path is used (attack phase runs after normal phase on the main thread).
-- The parallel path is only active when no attacks are configured at all (existing behavior unchanged).
+- Attack mode does not **disables** the parallel (`rayon`) path when any attack exists with `interleave: true` or `type: multi_ordered` — ordering is guaranteed under parallel execution also and attack phase and normal phase is mixed by a random pattern.
 
 ### 3.3 Built-in Attack Example Configs
 

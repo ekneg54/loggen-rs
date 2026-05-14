@@ -65,6 +65,7 @@ pub fn parse_attack_spec(s: &str) -> Option<(String, AttackConfig)> {
         repeat: "loop".to_string(),
         threshold: None,
         vars: None,
+        common: None,
     };
 
     match config.attack_type.as_str() {
