@@ -800,22 +800,27 @@ pub fn create_writer(config: &Config) -> Result<Box<dyn LogWriter>, Box<dyn std:
 ## Phase 5: Documentation & Testing (Weeks 9-10)
 
 ### 5.1 Comprehensive Documentation
-- Create detailed user guide
-- Document all configuration options
-- Add examples for all features
-- Write API documentation
+- **Configuration Reference:** Detailed catalog of all `Config`, `OutputConfig`, `AttackConfig`, `KafkaOutputConfig`, and `ThresholdConfig` fields, including types, defaults, and constraints.
+- **Template & Variable Guide:** Documentation on using Tera filters (e.g., `date`) and utilizing all built-in random variables (`ipv4`, `user_agent`, etc.).
+- **Attack Scenario Gallery:** An annotated collection of `.yaml` examples in `examples/` simulating realistic attack patterns (Brute force, DDoS, etc.).
+- **CLI Cheat Sheet:** Quick reference for all `Generate` and `Completions` subcommands and flags.
 
-### 5.2 Testing Coverage
-- Complete unit test suite (100% coverage)
-- Integration test for complete workflow
-- Performance benchmarks
-- Security testing for attack patterns
+### 5.2 Exhaustive Testing & Validation
+- **Performance Benchmarking:** Using `criterion` to validate all targets defined in §4.1.5 (Legacy, Template, Parallel, and Attack throughput).
+- **Regression Suite:** Automated integration tests ensuring attack interleaving, `common` field freezing, and `raw_intensity` logic remain intact.
+- **Writer Integration Tests:**
+  - `HttpWriter`: Test batching, `ndjson`/`json` formats, and retry mechanisms using a mock HTTP server.
+  - `KafkaWriter`: Test message production and `key_var` partitioning with a local Kafka instance.
+- **Boundary & Stress Testing:**
+  - Fuzzing `threshold_field` boundaries and `proportion` values (0.0, 1.0, and edge cases).
+  - Large-scale load testing (e.g., 10M+ entries) to monitor memory/RSS stability.
+- **Coverage Audit:** Ensure unit and integration test coverage for all new structs (`BufferedLogWriter`, `HttpWriter`, `KafkaWriter`, `ProgressReporter`).
 
-### 5.3 Final Polish
-- Code review and optimization
-- User experience testing
-- Documentation review
-- Release preparation
+### 5.3 Final Polish & Release
+- **CI/CD Verification:** Ensure `rust.yml` executes the full suite of unit, integration, and benchmarking tests on every PR.
+- **Dependency & Binary Audit:** Review the impact of `ureq`, `rdkafka`, and `tera` on binary size and compile times; optimize features where possible.
+- **User Experience (UX) Review:** Verify all `--help` and `after_help` text is clear and all `Completions` scripts work as expected across shells.
+- **Release Preparation:** Tagging the version in Git and preparing the GitHub release notes.
 
 ## Key Dependencies to Consider
 
