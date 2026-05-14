@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use loggen::cli::{apply_cli_args, create_writer, load_base_config, write_entries};
+use loggen::cli::{apply_cli_args, create_writer, load_base_config};
 use loggen::Generator;
 
 #[derive(Parser)]
@@ -95,13 +95,15 @@ fn handle_generate(
     let base = load_base_config(config_path);
     let config = apply_cli_args(base, output, count, level, message, cli_vars, templates);
     let generator = Generator::new(config);
-    let entries = generator.generate();
     let mut writer = create_writer(generator.config())
         .unwrap_or_else(|e| {
             eprintln!("Error: failed to create output writer: {}", e);
             std::process::exit(1);
         });
-    write_entries(&mut writer, &entries);
+    if let Err(e) = generator.generate_to_writer(&mut *writer) {
+        eprintln!("Error: generation failed: {}", e);
+        std::process::exit(1);
+    }
 }
 
 fn handle_http(_url: String) {
