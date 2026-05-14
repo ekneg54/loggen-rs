@@ -36,10 +36,14 @@ Generate large volumes of logs efficiently.
 This application is prepared to simulate high load situations
 Progress reporting - For long-running generation tasks
 
-### CLI interface
+## Usage
 
 A simple and intuitive command line interface for the user with corresponding options from yaml config
 Help system - CLI help and usage examples
+
+`logen help` - display help to all available subcommands
+`logen generate help` - example of getting help for the subcommand `generate`
+`logen generate --config=/examples/example.yaml` - run generator from example
 
 
 ## Project Guidelines

@@ -1,52 +1,116 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use loggen::config::OutputConfig;
+use loggen::output::{FileWriter, StdoutWriter};
+use loggen::{Config, Generator, LogWriter};
 
 #[derive(Parser)]
-#[command(name="loggen", version, about, long_about = None)]
+#[command(name = "loggen", version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Path to log config directory
-    #[arg(short, long, value_name = "DIR")]
+    /// Path to YAML config file
+    #[arg(short, long, value_name = "FILE", global = true)]
     config: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// send logs to an http endpoint
+    /// Generate log entries
+    Generate {
+        /// Output file path (default: stdout)
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<String>,
+
+        /// Number of log entries to generate
+        #[arg(short, long, default_value_t = 1)]
+        count: u64,
+
+        /// Log level
+        #[arg(short, long, default_value = "INFO")]
+        level: String,
+
+        /// Log message
+        #[arg(short, long, default_value = "Log entry generated")]
+        message: String,
+    },
+
+    /// Send logs to an HTTP endpoint (not yet implemented)
     Http {
-        /// base url of the http endpoint. Default is http://localhost:9000
+        /// base url of the http endpoint
         #[arg(short, long)]
         url: String,
     },
 
-    /// send logs to a kafka topic
+    /// Send logs to a Kafka topic (not yet implemented)
     Kafka {
         /// kafka config as a mapping of key value pairs
-        /// e.g. "{bootstrap.servers: localhost:9092, topic: loggen}"
-        /// Default is "{bootstrap.servers: localhost:9092, topic: producer}"
         #[arg(short, long)]
         kafkaconfig: String,
     },
-
 }
-
 
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Http { url }) => {
-            println!("Sending logs to http endpoint");
+        Some(Commands::Generate {
+            output,
+            count,
+            level,
+            message,
+        }) => {
+            let config = match cli.config {
+                Some(ref path) => Config::from_file(path).unwrap_or_else(|_| {
+                    eprintln!("Warning: could not read config file '{}', using defaults", path.display());
+                    Config::default()
+                }),
+                None => Config::default(),
+            };
+
+            let merged = Config {
+                count,
+                log_level: level,
+                message,
+                output: match output {
+                    Some(path) => OutputConfig {
+                        target: "file".to_string(),
+                        path: Some(path),
+                    },
+                    None => config.output,
+                },
+            };
+
+            let generator = Generator::new(merged);
+            let entries = generator.generate();
+
+            let output_cfg = generator.config();
+            let mut writer: Box<dyn LogWriter> = if output_cfg.output.target == "file" {
+                let path = output_cfg
+                    .output
+                    .path
+                    .as_deref()
+                    .unwrap_or("output.log");
+                Box::new(FileWriter::new(path).unwrap())
+            } else {
+                Box::new(StdoutWriter)
+            };
+
+            for entry in &entries {
+                writer.write_entry(entry).unwrap();
+            }
+            writer.flush().unwrap();
         }
-        Some(Commands::Kafka { kafkaconfig }) => {
-            println!("Sending logs to kafka topic");
+        Some(Commands::Http { url: _ }) => {
+            println!("Sending logs to http endpoint (not yet implemented)");
+        }
+        Some(Commands::Kafka { kafkaconfig: _ }) => {
+            println!("Sending logs to kafka topic (not yet implemented)");
         }
         None => {
-            println!("No command provided");
+            println!("No command provided. Use --help for usage information.");
         }
     }
 }
-

@@ -2,41 +2,26 @@ use std::fs::File;
 use std::io::Write;
 use loggen::{read_yaml_file, Config};
 
-
 #[test]
 fn test_read_yaml_file() {
-  
-  // Create a temporary YAML file
-  let test_file_path = "test_config.yaml";
-  let yaml_content = "\
-name: test_app
-version: 1.0
-settings:
-  debug: true
-  max_connections: 100
-  tags:
-  - test
-  - yaml
+    let test_file_path = "test_config.yaml";
+    let yaml_content = "\
+count: 5
+log_level: DEBUG
+message: integration test
 ";
-  
-  // Write test content to file
-  {
-    let mut file = File::create(test_file_path).unwrap();
-    file.write_all(yaml_content.as_bytes()).unwrap();
-  }
-  
-  // Test the function
-  let result = read_yaml_file::<Config, &str>(test_file_path);
-  
-  // Clean up
-  std::fs::remove_file(test_file_path).unwrap();
-  
-  // Basic assertion
-  assert!(result.is_ok(), "Failed to read valid YAML file");
-  
-  // Further assertions would depend on the actual return type of read_yaml_file
-  // For example:
-  // let data = result.unwrap();
-  // assert_eq!(data.name, "test_app");
-  // assert_eq!(data.version, "1.0");
+
+    {
+        let mut file = File::create(test_file_path).unwrap();
+        file.write_all(yaml_content.as_bytes()).unwrap();
+    }
+
+    let result = read_yaml_file::<Config, &str>(test_file_path);
+    std::fs::remove_file(test_file_path).unwrap();
+
+    assert!(result.is_ok());
+    let config = result.unwrap();
+    assert_eq!(config.count, 5);
+    assert_eq!(config.log_level, "DEBUG");
+    assert_eq!(config.message, "integration test");
 }

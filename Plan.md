@@ -14,6 +14,7 @@
 - Create YAML configuration parser
 - Build CLI interface with basic options
 - Implement stdout and file output streams
+- Build an example config to demonstrate the core functionality and CLI interface
 
 ### 1.3 Basic Testing
 - Unit tests for core components
