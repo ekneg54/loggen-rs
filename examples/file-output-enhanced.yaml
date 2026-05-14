@@ -1,0 +1,16 @@
+# loggen enhanced file output example
+# Demonstrates file rotation, buffering, and progress reporting
+# Usage: cargo run -- generate --config examples/file-output-enhanced.yaml --progress
+
+output:
+  target: file
+  path: /tmp/loggen-output.log
+  append: false              # Truncate on start (default: true)
+  rotate_bytes: 1048576      # Rotate after ~1MB (rename to .1)
+  buffer_size: 16384         # Output buffer in bytes before flush
+
+count: 100000
+log_level: INFO
+message: "Rotating log entry"
+progress: true
+progress_interval: 5000      # Report every 5000 entries

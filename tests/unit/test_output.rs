@@ -39,7 +39,7 @@ fn test_stdout_writer_template_mode() {
 fn test_file_writer_template_mode() {
     let path = "test_template_mode.log";
     {
-        let mut writer = FileWriter::new(path).unwrap();
+        let mut writer = FileWriter::new(path, true, None).unwrap();
         writer.template_mode = true;
         let entry = LogEntry {
             timestamp: "12345".to_string(),
@@ -65,7 +65,7 @@ fn test_file_writer_write_and_read() {
     let entry = test_entry();
 
     {
-        let mut writer = FileWriter::new(path).unwrap();
+        let mut writer = FileWriter::new(path, true, None).unwrap();
         writer.write_entry(&entry).unwrap();
         writer.flush().unwrap();
     }
@@ -83,7 +83,7 @@ fn test_file_writer_write_and_read() {
 fn test_file_writer_new_creates_file() {
     let path = "test_new_file.log";
     {
-        let writer = FileWriter::new(path);
+        let writer = FileWriter::new(path, true, None);
         assert!(writer.is_ok());
         assert_eq!(writer.unwrap().path(), path);
     }

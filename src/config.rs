@@ -14,10 +14,68 @@ pub struct OutputConfig {
     #[serde(default = "default_output_target")]
     pub target: String,
     pub path: Option<String>,
+
+    // Phase 4: Performance
+    #[serde(default = "default_buffer_size")]
+    pub buffer_size: u64,
+    #[serde(default)]
+    pub progress: Option<bool>,
+    #[serde(default = "default_progress_interval")]
+    pub progress_interval: u64,
+
+    // Phase 4: HTTP output
+    pub url: Option<String>,
+    #[serde(default = "default_batch_size")]
+    pub batch_size: u64,
+    #[serde(default = "default_output_format")]
+    pub format: String,
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
+    #[serde(default = "default_retry_attempts")]
+    pub retry_attempts: u32,
+    #[serde(default = "default_retry_delay_ms")]
+    pub retry_delay_ms: u64,
+
+    // Phase 4: Kafka output
+    pub kafka: Option<KafkaOutputConfig>,
+
+    // Phase 4: File enhancements
+    #[serde(default = "default_append")]
+    pub append: bool,
+    #[serde(default)]
+    pub rotate_bytes: Option<u64>,
 }
 
 fn default_output_target() -> String {
     "stdout".to_string()
+}
+
+fn default_buffer_size() -> u64 {
+    8192
+}
+
+fn default_progress_interval() -> u64 {
+    10000
+}
+
+fn default_batch_size() -> u64 {
+    100
+}
+
+fn default_output_format() -> String {
+    "ndjson".to_string()
+}
+
+fn default_retry_attempts() -> u32 {
+    3
+}
+
+fn default_retry_delay_ms() -> u64 {
+    1000
+}
+
+fn default_append() -> bool {
+    true
 }
 
 impl Default for OutputConfig {
@@ -25,8 +83,51 @@ impl Default for OutputConfig {
         OutputConfig {
             target: default_output_target(),
             path: None,
+            buffer_size: default_buffer_size(),
+            progress: None,
+            progress_interval: default_progress_interval(),
+            url: None,
+            batch_size: default_batch_size(),
+            format: default_output_format(),
+            headers: None,
+            retry_attempts: default_retry_attempts(),
+            retry_delay_ms: default_retry_delay_ms(),
+            kafka: None,
+            append: default_append(),
+            rotate_bytes: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KafkaOutputConfig {
+    #[serde(default = "default_kafka_brokers")]
+    pub brokers: String,
+    pub topic: String,
+    #[serde(default)]
+    pub key_var: Option<String>,
+    #[serde(default = "default_kafka_acks")]
+    pub acks: String,
+    #[serde(default = "default_kafka_timeout")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_kafka_batch")]
+    pub batch_size: u64,
+}
+
+fn default_kafka_brokers() -> String {
+    "localhost:9092".to_string()
+}
+
+fn default_kafka_acks() -> String {
+    "1".to_string()
+}
+
+fn default_kafka_timeout() -> u64 {
+    5000
+}
+
+fn default_kafka_batch() -> u64 {
+    100
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -121,6 +222,18 @@ pub struct Config {
     pub attacks: Option<Vec<AttackConfig>>,
     #[serde(default)]
     pub attack_only: bool,
+
+    // Phase 4: Performance & Advanced
+    #[serde(default)]
+    pub num_threads: Option<usize>,
+    #[serde(default)]
+    pub progress: Option<bool>,
+    #[serde(default = "default_progress_interval_config")]
+    pub progress_interval: u64,
+}
+
+fn default_progress_interval_config() -> u64 {
+    10000
 }
 
 fn default_count() -> u64 {
@@ -159,6 +272,9 @@ impl Default for Config {
             template_rotation: default_template_rotation(),
             attacks: None,
             attack_only: false,
+            num_threads: None,
+            progress: None,
+            progress_interval: default_progress_interval_config(),
         }
     }
 }
@@ -206,6 +322,100 @@ mod tests {
         assert_eq!(config.template_rotation, "sequential");
         assert!(config.attacks.is_none());
         assert!(!config.attack_only);
+        assert!(config.num_threads.is_none());
+        assert!(config.progress.is_none());
+        assert_eq!(config.progress_interval, 10000);
+        assert_eq!(config.output.buffer_size, 8192);
+        assert!(config.output.url.is_none());
+        assert_eq!(config.output.batch_size, 100);
+        assert_eq!(config.output.format, "ndjson");
+        assert!(config.output.kafka.is_none());
+        assert!(config.output.append);
+        assert!(config.output.rotate_bytes.is_none());
+    }
+
+    #[test]
+    fn test_config_yaml_with_http_output() {
+        let yaml = r#"
+output:
+  target: http
+  url: https://logs.example.com/ingest
+  batch_size: 500
+  format: json
+  headers:
+    Authorization: "Bearer token123"
+  retry_attempts: 5
+  retry_delay_ms: 2000
+count: 100
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.output.target, "http");
+        assert_eq!(config.output.url.as_deref(), Some("https://logs.example.com/ingest"));
+        assert_eq!(config.output.batch_size, 500);
+        assert_eq!(config.output.format, "json");
+        let headers = config.output.headers.unwrap();
+        assert_eq!(headers.get("Authorization").unwrap(), "Bearer token123");
+        assert_eq!(config.output.retry_attempts, 5);
+        assert_eq!(config.output.retry_delay_ms, 2000);
+    }
+
+    #[test]
+    fn test_config_yaml_with_kafka_output() {
+        let yaml = r#"
+output:
+  target: kafka
+  kafka:
+    brokers: "kafka-1:9092,kafka-2:9092"
+    topic: "app-logs"
+    key_var: "ipv4"
+    acks: "all"
+    timeout_ms: 10000
+    batch_size: 50
+count: 100
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.output.target, "kafka");
+        let kafka = config.output.kafka.unwrap();
+        assert_eq!(kafka.brokers, "kafka-1:9092,kafka-2:9092");
+        assert_eq!(kafka.topic, "app-logs");
+        assert_eq!(kafka.key_var.as_deref(), Some("ipv4"));
+        assert_eq!(kafka.acks, "all");
+        assert_eq!(kafka.timeout_ms, 10000);
+        assert_eq!(kafka.batch_size, 50);
+    }
+
+    #[test]
+    fn test_config_yaml_file_enhancements() {
+        let yaml = r#"
+output:
+  target: file
+  path: /tmp/test.log
+  append: false
+  rotate_bytes: 1048576
+  buffer_size: 16384
+count: 50
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(!config.output.append);
+        assert_eq!(config.output.rotate_bytes, Some(1048576));
+        assert_eq!(config.output.buffer_size, 16384);
+    }
+
+    #[test]
+    fn test_config_yaml_with_progress() {
+        let yaml = r#"
+count: 100000
+progress: true
+progress_interval: 5000
+num_threads: 8
+output:
+  target: file
+  path: /tmp/progress.log
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.progress, Some(true));
+        assert_eq!(config.progress_interval, 5000);
+        assert_eq!(config.num_threads, Some(8));
     }
 
     #[test]

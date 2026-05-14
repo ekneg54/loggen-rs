@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::config::{AttackConfig, OutputConfig};
-use crate::output::{FileWriter, StdoutWriter};
-use crate::{Config, LogEntry, LogWriter};
+use crate::output::{BufferedLogWriter, FileWriter, HttpWriter, StdoutWriter};
+use crate::{Config, LogWriter};
 
 pub fn load_base_config(config_path: Option<&PathBuf>) -> Config {
     match config_path {
@@ -24,7 +24,6 @@ pub fn parse_attack_spec(s: &str) -> Option<(String, AttackConfig)> {
     let attack_type_str = &rest[..colon_pos];
     let remaining = &rest[colon_pos + 1..];
 
-    // Map short type names
     let attack_type = match attack_type_str {
         "single" => "single_event",
         "multi" => "multi_ordered",
@@ -33,15 +32,11 @@ pub fn parse_attack_spec(s: &str) -> Option<(String, AttackConfig)> {
     }
     .to_string();
 
-    // Try to find count at the end.
-    // Only treat :NUMBER as a count if preceded by a space, to avoid
-    // misparsing colons in URLs, ports, or timestamps (e.g. evil.com:8080).
     let (template_str, count) = if let Some(last_colon) = remaining.rfind(':') {
         let potential_count = &remaining[last_colon + 1..];
         let preceded_by_space = last_colon > 0 && remaining.as_bytes()[last_colon - 1] == b' ';
         if preceded_by_space {
             if let Ok(c) = potential_count.parse::<u64>() {
-                // Strip the trailing space before the colon
                 let template = &remaining[..last_colon - 1];
                 (template, Some(c))
             } else {
@@ -84,14 +79,12 @@ pub fn parse_attack_spec(s: &str) -> Option<(String, AttackConfig)> {
 }
 
 pub fn merge_cli_attacks(attacks: Vec<AttackConfig>) -> Vec<AttackConfig> {
-    // Group multi_ordered attacks by name and merge their sequences
     let mut seen: HashMap<String, AttackConfig> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
 
     for attack in attacks {
         let key = attack.name.clone().unwrap_or_default();
         if let Some(existing) = seen.remove(&key) {
-            // Merge into existing
             let mut merged = existing;
             if let Some(seq) = attack.sequence {
                 if let Some(ref mut existing_seq) = merged.sequence {
@@ -151,11 +144,11 @@ pub fn apply_cli_args(
         Some(path) => OutputConfig {
             target: "file".to_string(),
             path: Some(path),
+            ..OutputConfig::default()
         },
         None => config.output,
     };
 
-    // Merge CLI --var into template_vars (CLI takes precedence)
     let mut merged = config.template_vars.clone().unwrap_or_default();
     for (k, v) in var {
         merged.insert(k, v);
@@ -164,12 +157,10 @@ pub fn apply_cli_args(
         config.template_vars = Some(merged);
     }
 
-    // CLI --templates overrides config file
     if templates.is_some() {
         config.templates = templates;
     }
 
-    // Merge attacks from CLI args into config (CLI overrides file on name collisions)
     if !attack_configs.is_empty() || attack_only {
         let mut base_attacks = config.attacks.clone().unwrap_or_default();
         let mut seen_names: HashMap<String, usize> = HashMap::new();
@@ -200,19 +191,75 @@ pub fn apply_cli_args(
     config
 }
 
+pub fn validate_http_config(output: &OutputConfig) -> Result<(), String> {
+    if output.url.is_none() {
+        return Err("HTTP output requires 'url' to be set".to_string());
+    }
+    if !["ndjson", "json", "raw"].contains(&output.format.as_str()) {
+        return Err(format!("Invalid HTTP format '{}': must be ndjson, json, or raw", output.format));
+    }
+    Ok(())
+}
+
+pub fn validate_kafka_config(output: &OutputConfig) -> Result<(), String> {
+    let kafka = output.kafka.as_ref().ok_or("Kafka output requires 'kafka' config block")?;
+    if kafka.topic.is_empty() {
+        return Err("Kafka output requires 'topic' to be set".to_string());
+    }
+    if !["0", "1", "all"].contains(&kafka.acks.as_str()) {
+        return Err(format!("Invalid Kafka acks '{}': must be 0, 1, or all", kafka.acks));
+    }
+    Ok(())
+}
+
 pub fn create_writer(config: &Config) -> Result<Box<dyn LogWriter>, Box<dyn std::error::Error>> {
     let template_mode = config.has_templates();
-    if config.output.target == "file" {
-        let path = config.output.path.as_deref().unwrap_or("output.log");
-        let mut writer = FileWriter::new(path)?;
-        writer.template_mode = template_mode;
-        Ok(Box::new(writer))
-    } else {
-        Ok(Box::new(StdoutWriter { template_mode }))
+    match config.output.target.as_str() {
+        "http" => {
+            validate_http_config(&config.output)
+                .map_err(|e| format!("Config validation error: {}", e))?;
+            let writer = HttpWriter::new(
+                config.output.url.as_deref().unwrap_or(""),
+                config.output.batch_size,
+                &config.output.format,
+                config.output.headers.as_ref(),
+                config.output.retry_attempts,
+                config.output.retry_delay_ms,
+            )?;
+            Ok(Box::new(writer))
+        }
+        "kafka" => {
+            validate_kafka_config(&config.output)
+                .map_err(|e| format!("Config validation error: {}", e))?;
+            let kafka = config.output.kafka.as_ref().unwrap();
+            let writer = crate::output::KafkaWriter::new(
+                &kafka.brokers,
+                &kafka.topic,
+                kafka.key_var.as_deref(),
+                &kafka.acks,
+                kafka.timeout_ms,
+                kafka.batch_size,
+            )?;
+            Ok(Box::new(writer))
+        }
+        "file" => {
+            let path = config.output.path.as_deref().unwrap_or("output.log");
+            let writer = FileWriter::new(path, !config.output.append, config.output.rotate_bytes)?;
+            let mut writer = BufferedLogWriter::new(writer, config.output.buffer_size);
+            writer.inner.template_mode = template_mode;
+            Ok(Box::new(writer))
+        }
+        _ => {
+            // stdout
+            let writer = StdoutWriter::new();
+            let mut writer = BufferedLogWriter::new(writer, config.output.buffer_size);
+            writer.inner.template_mode = template_mode;
+            Ok(Box::new(writer))
+        }
     }
 }
 
-pub fn write_entries(writer: &mut Box<dyn LogWriter>, entries: &[LogEntry]) {
+pub fn write_entries(writer: &mut Box<dyn LogWriter>, entries: &[crate::LogEntry]) {
     for entry in entries {
         writer.write_entry(entry).unwrap();
     }

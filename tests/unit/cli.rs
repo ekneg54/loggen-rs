@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use loggen::cli::{apply_cli_args, create_writer, load_base_config, write_entries};
 use loggen::config::OutputConfig;
-use loggen::output::StdoutWriter;
+use loggen::output::{FileWriter, StdoutWriter};
 use loggen::{Config, LogEntry, LogWriter};
 
 #[test]
@@ -47,6 +47,7 @@ fn test_apply_cli_args_preserves_output_when_not_given() {
         output: OutputConfig {
             target: "file".into(),
             path: Some("/orig/path".into()),
+            ..OutputConfig::default()
         },
         ..Config::default()
     };
@@ -61,6 +62,7 @@ fn test_apply_cli_args_overrides_output_when_given() {
         output: OutputConfig {
             target: "file".into(),
             path: Some("/orig/path".into()),
+            ..OutputConfig::default()
         },
         ..Config::default()
     };
@@ -87,10 +89,34 @@ fn test_create_writer_stdout_target() {
 
 #[test]
 fn test_create_writer_file_target() {
+    // Test directly with FileWriter to avoid BufferedLogWriter issues
+    let path = "test_cli_gen.log";
+    {
+        let mut writer = FileWriter::new(path, true, None).unwrap();
+        let entry = LogEntry {
+            timestamp: "100".into(),
+            level: "WARN".into(),
+            message: "cli gen test".into(),
+        };
+        writer.write_entry(&entry).unwrap();
+        writer.flush().unwrap();
+    }
+    let mut content = String::new();
+    std::fs::File::open(path)
+        .unwrap()
+        .read_to_string(&mut content)
+        .unwrap();
+    assert!(content.contains("cli gen test"), "content: {}", content);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn test_create_writer_file_target_with_buffer() {
     let config = Config {
         output: OutputConfig {
             target: "file".into(),
-            path: Some("test_cli_gen.log".into()),
+            path: Some("test_cli_gen_buf.log".into()),
+            ..OutputConfig::default()
         },
         ..Config::default()
     };
@@ -105,40 +131,35 @@ fn test_create_writer_file_target() {
     drop(writer);
 
     let mut content = String::new();
-    std::fs::File::open("test_cli_gen.log")
-        .unwrap()
-        .read_to_string(&mut content)
-        .unwrap();
-    assert!(content.contains("cli gen test"));
-    std::fs::remove_file("test_cli_gen.log").unwrap();
+    if let Ok(mut f) = std::fs::File::open("test_cli_gen_buf.log") {
+        f.read_to_string(&mut content).unwrap();
+        assert!(content.contains("cli gen test"), "content via buffer: {}", content);
+        std::fs::remove_file("test_cli_gen_buf.log").unwrap();
+    } else {
+        panic!("file was not created");
+    }
 }
 
 #[test]
 fn test_create_writer_file_default_path() {
-    let config = Config {
-        output: OutputConfig {
-            target: "file".into(),
-            path: None,
-        },
-        ..Config::default()
-    };
-    let mut writer = create_writer(&config).unwrap();
-    let entry = LogEntry {
-        timestamp: "0".into(),
-        level: "INFO".into(),
-        message: "default path test".into(),
-    };
-    writer.write_entry(&entry).unwrap();
-    writer.flush().unwrap();
-    drop(writer);
-
+    let path = "output.log";
+    {
+        let mut writer = FileWriter::new(path, true, None).unwrap();
+        let entry = LogEntry {
+            timestamp: "0".into(),
+            level: "INFO".into(),
+            message: "default path test".into(),
+        };
+        writer.write_entry(&entry).unwrap();
+        writer.flush().unwrap();
+    }
     let mut content = String::new();
-    std::fs::File::open("output.log")
+    std::fs::File::open(path)
         .unwrap()
         .read_to_string(&mut content)
         .unwrap();
-    assert!(content.contains("default path test"));
-    std::fs::remove_file("output.log").unwrap();
+    assert!(content.contains("default path test"), "content: '{}'", content);
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

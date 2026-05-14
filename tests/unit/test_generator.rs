@@ -17,6 +17,9 @@ fn test_config() -> Config {
         template_rotation: "sequential".to_string(),
         attacks: None,
         attack_only: false,
+        num_threads: None,
+        progress: None,
+        progress_interval: 10000,
     }
 }
 

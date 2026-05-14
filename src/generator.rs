@@ -13,7 +13,7 @@ use regex::Regex;
 use tera::{Context, Tera};
 
 use crate::config::{AttackConfig, AttackVarConfig, Config, LogEntry, ThresholdConfig};
-use crate::output::LogWriter;
+use crate::output::{LogWriter, ProgressReporter};
 
 const BUILTIN_VARS: &[&str] = &["timestamp", "level", "index", "message"];
 const AUTO_RANDOM_VARS: &[&str] = &["ip", "ipv4", "ipv6", "user_agent", "email", "url", "port", "status", "user"];
@@ -361,18 +361,27 @@ impl Generator {
     }
 
     pub fn generate_to_writer(&self, writer: &mut dyn LogWriter) -> Result<(), Box<dyn std::error::Error>> {
+        let mut progress = ProgressReporter::new(false, self.config.count, 1.0, 10000);
+        self.generate_to_writer_with_progress(writer, &mut progress)
+    }
+
+    pub fn generate_to_writer_with_progress(
+        &self,
+        writer: &mut dyn LogWriter,
+        progress: &mut ProgressReporter,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if self.has_attacks() {
-            self.write_attack_stream(writer)?;
+            self.write_attack_stream(writer, progress)?;
             writer.flush()?;
             return Ok(());
         }
         let count = self.config.count;
         if self.templates.is_empty() {
-            self.write_legacy_stream(count, writer)?;
+            self.write_legacy_stream(count, writer, progress)?;
         } else if self.config.random_intensity >= 1.0 {
-            self.write_template_parallel_stream(count, writer)?;
+            self.write_template_parallel_stream(count, writer, progress)?;
         } else {
-            self.write_template_stream(count, writer)?;
+            self.write_template_stream(count, writer, progress)?;
         }
         writer.flush()?;
         Ok(())
@@ -478,7 +487,7 @@ impl Generator {
         }
     }
 
-    fn write_legacy_stream(&self, count: u64, writer: &mut dyn LogWriter) -> Result<(), Box<dyn std::error::Error>> {
+    fn write_legacy_stream(&self, count: u64, writer: &mut dyn LogWriter, progress: &mut ProgressReporter) -> Result<(), Box<dyn std::error::Error>> {
         let ts = current_timestamp().to_string();
         for i in 0..count {
             writer.write_entry(&LogEntry {
@@ -486,11 +495,12 @@ impl Generator {
                 level: self.config.log_level.clone(),
                 message: format!("{} #{}", self.config.message, i + 1),
             })?;
+            progress.report(i + 1);
         }
         Ok(())
     }
 
-    fn write_template_stream(&self, count: u64, writer: &mut dyn LogWriter) -> Result<(), Box<dyn std::error::Error>> {
+    fn write_template_stream(&self, count: u64, writer: &mut dyn LogWriter, progress: &mut ProgressReporter) -> Result<(), Box<dyn std::error::Error>> {
         let template_vars = self.config.template_vars.clone().unwrap_or_default();
         let random_vars = self.config.random_vars.clone().unwrap_or_default();
         let auto_random: HashSet<String> = AUTO_RANDOM_VARS.iter().map(|s| s.to_string()).collect();
@@ -502,11 +512,12 @@ impl Generator {
         for i in 0..count {
             let entry = self.render_single_entry(i, &template_vars, &all_random_names, &mut rng, &mut current, ts);
             writer.write_entry(&entry)?;
+            progress.report(i + 1);
         }
         Ok(())
     }
 
-    fn write_template_parallel_stream(&self, count: u64, writer: &mut dyn LogWriter) -> Result<(), Box<dyn std::error::Error>> {
+    fn write_template_parallel_stream(&self, count: u64, writer: &mut dyn LogWriter, progress: &mut ProgressReporter) -> Result<(), Box<dyn std::error::Error>> {
         let (tx, rx) = mpsc::channel();
         let chunk_size: u64 = 5000;
 
@@ -514,6 +525,7 @@ impl Generator {
         let config = self.config.clone();
         let seed = self.seed;
         let rotation = self.rotation;
+        let total_count = count;
 
         std::thread::spawn(move || {
             let ts = current_timestamp();
@@ -529,8 +541,8 @@ impl Generator {
                 }
             }
 
-            for chunk_start in (0..count).step_by(chunk_size as usize) {
-                let chunk_end = std::cmp::min(chunk_start + chunk_size, count);
+            for chunk_start in (0..total_count).step_by(chunk_size as usize) {
+                let chunk_end = std::cmp::min(chunk_start + chunk_size, total_count);
                 let entries: Vec<LogEntry> = (chunk_start..chunk_end).into_par_iter().map(|i| {
                     let mut rng = StdRng::seed_from_u64(seed + i);
                     let template_index = match rotation {
@@ -571,9 +583,12 @@ impl Generator {
             }
         });
 
+        let mut emitted: u64 = 0;
         while let Ok(entries) = rx.recv() {
             for entry in &entries {
                 writer.write_entry(&entry)?;
+                emitted += 1;
+                progress.report(emitted);
             }
         }
 
@@ -1013,22 +1028,25 @@ impl Generator {
         }
     }
 
-    fn write_attack_stream(&self, writer: &mut dyn LogWriter) -> Result<(), Box<dyn std::error::Error>> {
+    fn write_attack_stream(&self, writer: &mut dyn LogWriter, progress: &mut ProgressReporter) -> Result<(), Box<dyn std::error::Error>> {
         let attacks = self.config.attacks.as_ref().expect("attacks must be Some");
         let count = self.config.count;
+        let mut total_emitted: u64 = 0;
 
         if self.config.attack_only {
             let mut engine = AttackEngine::new(attacks, self.seed, count);
             let any_interleave = attacks.iter().any(|a| a.interleave);
 
             if any_interleave {
-                self.write_attack_interleaved(&mut engine, writer)?;
+                let _emitted = self.write_attack_interleaved(&mut engine, writer)?;
             } else {
                 for (attack_idx, attack) in attacks.iter().enumerate() {
                     let remaining = engine.remaining[attack_idx];
                     for i in 0..remaining {
                         let entry = render_attack_entry(self, attack, i + 1, attack_idx, &mut engine);
                         writer.write_entry(&entry)?;
+                        total_emitted += 1;
+                        progress.report(total_emitted);
                     }
                 }
             }
@@ -1039,16 +1057,17 @@ impl Generator {
 
         if any_interleave {
             let mut engine = AttackEngine::new(attacks, self.seed, count);
-            self.write_attack_interleaved(&mut engine, writer)?;
+            let _emitted = self.write_attack_interleaved(&mut engine, writer)?;
         } else {
             // Normal streaming first (use parallel when random_intensity >= 1.0)
             if self.templates.is_empty() {
-                self.write_legacy_stream(count, writer)?;
+                self.write_legacy_stream(count, writer, progress)?;
             } else if self.config.random_intensity >= 1.0 {
-                self.write_template_parallel_stream(count, writer)?;
+                self.write_template_parallel_stream(count, writer, progress)?;
             } else {
-                self.write_template_stream(count, writer)?;
+                self.write_template_stream(count, writer, progress)?;
             }
+            total_emitted += count;
 
             // Then attack entries
             let mut engine = AttackEngine::new(attacks, self.seed + count, count);
@@ -1057,6 +1076,8 @@ impl Generator {
                 for i in 0..remaining {
                     let entry = render_attack_entry(self, attack, i + 1, attack_idx, &mut engine);
                     writer.write_entry(&entry)?;
+                    total_emitted += 1;
+                    progress.report(total_emitted);
                 }
             }
         }
@@ -1064,7 +1085,7 @@ impl Generator {
         Ok(())
     }
 
-    fn write_attack_interleaved(&self, engine: &mut AttackEngine, writer: &mut dyn LogWriter) -> Result<(), Box<dyn std::error::Error>> {
+    fn write_attack_interleaved(&self, engine: &mut AttackEngine, writer: &mut dyn LogWriter) -> Result<u64, Box<dyn std::error::Error>> {
         let attacks = self.config.attacks.as_ref().expect("attacks must be Some");
         let has_normal = !self.config.attack_only;
         let normal_count = self.config.count;
@@ -1137,7 +1158,7 @@ impl Generator {
             }
         }
 
-        Ok(())
+        Ok(total_emitted)
     }
 }
 

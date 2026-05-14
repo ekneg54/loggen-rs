@@ -1,0 +1,18 @@
+# loggen Kafka output example
+# Sends generated logs to a Kafka topic
+# Usage: cargo run -- generate --config examples/kafka-output.yaml
+# Note: Requires librdkafka and building with --features kafka
+
+output:
+  target: kafka
+  kafka:
+    brokers: "localhost:9092"
+    topic: "app-logs"
+    key_var: "ipv4"          # Use ipv4 as Kafka message key for partitioning
+    acks: "1"                # 0, 1 (default), or all
+    timeout_ms: 5000
+    batch_size: 100
+
+count: 50000
+log_level: INFO
+templates: ./templates/

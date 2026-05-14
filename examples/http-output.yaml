@@ -1,0 +1,18 @@
+# loggen HTTP output example
+# Sends generated logs to an HTTP endpoint as NDJSON
+# Usage: cargo run -- generate --config examples/http-output.yaml
+
+output:
+  target: http
+  url: http://localhost:9000/lab/123/ABC/auditlog
+  batch_size: 500
+  format: ndjson          # ndjson (default), json, or raw
+  headers:
+    Authorization: "Bearer token123"
+    X-Source: "loggen"
+  retry_attempts: 3
+  retry_delay_ms: 2000
+
+count: 10000
+log_level: INFO
+templates: ./templates/
