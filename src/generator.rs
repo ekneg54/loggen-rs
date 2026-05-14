@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::{LazyLock, mpsc};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::{DateTime, Utc};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -11,7 +12,7 @@ use rayon::prelude::*;
 use regex::Regex;
 use tera::{Context, Tera};
 
-use crate::config::{Config, LogEntry};
+use crate::config::{AttackConfig, AttackVarConfig, Config, LogEntry, ThresholdConfig};
 use crate::output::LogWriter;
 
 const BUILTIN_VARS: &[&str] = &["timestamp", "level", "index", "message"];
@@ -26,6 +27,12 @@ fn current_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn ts_to_rfc3339(ts: u64) -> String {
+    DateTime::<Utc>::from_timestamp_secs(ts as i64)
+        .expect("valid unix timestamp")
+        .to_rfc3339()
 }
 
 fn random_ipv4(rng: &mut StdRng) -> String {
@@ -252,7 +259,7 @@ impl Generator {
                 .map(|d| d.as_nanos() as u64)
                 .unwrap_or(0)
         });
-        let (templates, tera) = match load_templates_from_config(&config) {
+        let (templates, mut tera) = match load_templates_from_config(&config) {
             Ok(tpls) => {
                 let template_vars = config.template_vars.clone().unwrap_or_default();
                 let random_vars = config.random_vars.clone().unwrap_or_default();
@@ -272,6 +279,51 @@ impl Generator {
             }
         };
 
+        // Pre-register attack templates in Tera instance
+        if let Some(ref attacks) = config.attacks {
+            let template_vars = config.template_vars.clone().unwrap_or_default();
+            let random_vars = config.random_vars.clone().unwrap_or_default();
+
+            for (attack_idx, attack) in attacks.iter().enumerate() {
+                let mut attack_templates: Vec<String> = Vec::new();
+                match attack.attack_type.as_str() {
+                    "multi_ordered" => {
+                        if let Some(ref seq) = attack.sequence {
+                            for (seq_idx, tpl) in seq.iter().enumerate() {
+                                let name = format!("attack_{}_seq_{}", attack_idx, seq_idx);
+                                if tera.add_raw_template(&name, tpl).is_err() {
+                                    continue;
+                                }
+                                attack_templates.push(tpl.clone());
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some(ref tpl) = attack.template {
+                            let name = format!("attack_{}", attack_idx);
+                            if tera.add_raw_template(&name, tpl).is_err() {
+                                continue;
+                            }
+                            attack_templates.push(tpl.clone());
+                        }
+                    }
+                }
+
+                // Validate attack templates against known variables
+                let attack_var_names: HashSet<String> = attack.vars.as_ref()
+                    .map(|v| v.keys().cloned().collect())
+                    .unwrap_or_default();
+                let mut combined_vars = template_vars.clone();
+                for k in &attack_var_names {
+                    combined_vars.entry(k.clone()).or_insert_with(|| "attack_var".to_string());
+                }
+                let combined_random: HashMap<String, Vec<String>> = random_vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                if let Err(e) = validate_templates(&attack_templates, &combined_vars, &combined_random) {
+                    panic!("Attack template validation error: {}", e);
+                }
+            }
+        }
+
         Generator {
             rotation: TemplateRotation::from_str(&config.template_rotation),
             config,
@@ -286,6 +338,9 @@ impl Generator {
     }
 
     pub fn generate(&self) -> Vec<LogEntry> {
+        if self.has_attacks() {
+            return self.generate_with_attacks();
+        }
         if self.templates.is_empty() {
             return self.generate_legacy(self.config.count);
         }
@@ -293,6 +348,9 @@ impl Generator {
     }
 
     pub fn generate_with_count(&self, count: u64) -> Vec<LogEntry> {
+        if self.has_attacks() {
+            return self.generate_with_attacks();
+        }
         if self.templates.is_empty() {
             return self.generate_legacy(count);
         }
@@ -300,6 +358,11 @@ impl Generator {
     }
 
     pub fn generate_to_writer(&self, writer: &mut dyn LogWriter) -> Result<(), Box<dyn std::error::Error>> {
+        if self.has_attacks() {
+            self.write_attack_stream(writer)?;
+            writer.flush()?;
+            return Ok(());
+        }
         let count = self.config.count;
         if self.templates.is_empty() {
             self.write_legacy_stream(count, writer)?;
@@ -362,7 +425,7 @@ impl Generator {
 
         let mut ctx_values: HashMap<String, tera::Value> = HashMap::new();
 
-        ctx_values.insert("timestamp".to_string(), tera::Value::Number(tera::Number::from(ts)));
+        ctx_values.insert("timestamp".to_string(), tera::Value::String(ts_to_rfc3339(ts)));
         ctx_values.insert("level".to_string(), tera::Value::String(self.config.log_level.clone()));
         ctx_values.insert("index".to_string(), tera::Value::Number(tera::Number::from((i + 1) as u64)));
         ctx_values.insert("message".to_string(), tera::Value::String(self.config.message.clone()));
@@ -475,7 +538,7 @@ impl Generator {
                     let used_vars = extract_template_vars(template);
 
                     let mut ctx: HashMap<String, tera::Value> = HashMap::new();
-                    ctx.insert("timestamp".into(), tera::Value::Number(tera::Number::from(ts)));
+                    ctx.insert("timestamp".into(), tera::Value::String(ts_to_rfc3339(ts)));
                     ctx.insert("level".into(), tera::Value::String(config.log_level.clone()));
                     ctx.insert("index".into(), tera::Value::Number(tera::Number::from((i + 1) as u64)));
                     ctx.insert("message".into(), tera::Value::String(config.message.clone()));
@@ -508,6 +571,539 @@ impl Generator {
         while let Ok(entries) = rx.recv() {
             for entry in &entries {
                 writer.write_entry(&entry)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ---- Phase 3: Attack Pattern Generation ----
+
+#[derive(Debug, Clone)]
+pub struct AttackCursor {
+    pub sequence_index: usize,
+}
+
+impl AttackCursor {
+    pub fn new() -> Self {
+        AttackCursor { sequence_index: 0 }
+    }
+}
+
+pub struct AttackEngine<'a> {
+    pub attacks: &'a [AttackConfig],
+    pub rng: StdRng,
+    pub cursors: Vec<AttackCursor>,
+    pub remaining: Vec<u64>,
+    pub threshold_accepted: Vec<u64>,
+    pub var_cycles: Vec<HashMap<String, usize>>,
+}
+
+impl<'a> AttackEngine<'a> {
+    pub fn new(attacks: &'a [AttackConfig], seed: u64, fallback_count: u64) -> Self {
+        let count = attacks.len();
+        AttackEngine {
+            attacks,
+            rng: StdRng::seed_from_u64(seed),
+            cursors: vec![AttackCursor::new(); count],
+            remaining: attacks.iter().map(|a| {
+                let mut c = a.count.unwrap_or(fallback_count);
+                // For multi_ordered with repeat=once, cap at sequence length
+                if a.attack_type == "multi_ordered" && a.repeat == "once" {
+                    if let Some(ref seq) = a.sequence {
+                        c = c.min(seq.len() as u64);
+                    }
+                }
+                c
+            }).collect(),
+            threshold_accepted: vec![0; count],
+            var_cycles: vec![HashMap::new(); count],
+        }
+    }
+
+    pub fn is_exhausted(&self) -> bool {
+        self.remaining.iter().all(|&r| r == 0)
+    }
+
+    pub fn attack_remaining(&self, idx: usize) -> u64 {
+        self.remaining[idx]
+    }
+}
+
+fn is_value_in_bucket(val_str: &str, threshold: &ThresholdConfig) -> bool {
+    let val: u64 = match val_str.parse() {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let above_min = threshold.min.map_or(true, |m| val >= m);
+    let below_max = threshold.max.map_or(true, |m| val <= m);
+    above_min && below_max
+}
+
+fn pick_attack_var_value(var_config: &AttackVarConfig, cycle_pos: &mut usize, rng: &mut StdRng) -> String {
+    if var_config.values.is_empty() {
+        return String::new();
+    }
+    match var_config.mode.as_str() {
+        "cycle" => {
+            let idx = *cycle_pos % var_config.values.len();
+            *cycle_pos += 1;
+            var_config.values[idx].clone()
+        }
+        "weighted" => {
+            let n = var_config.values.len();
+            let total_weight: usize = (1..=n).sum();
+            let roll = rng.gen_range(0..total_weight);
+            let mut cum = 0;
+            for (i, v) in var_config.values.iter().enumerate() {
+                cum += n - i;
+                if roll < cum {
+                    return v.clone();
+                }
+            }
+            var_config.values.last().cloned().unwrap_or_default()
+        }
+        _ => {
+            var_config.values.choose(rng).cloned().unwrap_or_default()
+        }
+    }
+}
+
+fn render_attack_entry(
+    generator: &Generator,
+    attack: &AttackConfig,
+    entry_index: u64,
+    attack_idx: usize,
+    engine: &mut AttackEngine,
+) -> LogEntry {
+    let cursor = &mut engine.cursors[attack_idx];
+    let ts = current_timestamp();
+    let template_vars = generator.config.template_vars.clone().unwrap_or_default();
+    let random_vars = generator.config.random_vars.clone().unwrap_or_default();
+    let auto_random: HashSet<String> = AUTO_RANDOM_VARS.iter().map(|s| s.to_string()).collect();
+    let all_random_names: HashSet<String> = auto_random.union(&random_vars.keys().cloned().collect()).cloned().collect();
+    let attack_vars = attack.vars.clone().unwrap_or_default();
+    let attack_var_names: HashSet<String> = attack_vars.keys().cloned().collect();
+
+    // Save pre-advance sequence index for template name computation
+    let pre_seq_index = cursor.sequence_index;
+    let (template_str, named) = match attack.attack_type.as_str() {
+        "multi_ordered" => {
+            if let Some(ref seq) = attack.sequence {
+                if seq.is_empty() {
+                    ("<empty sequence>".to_string(), None)
+                } else {
+                    let idx = pre_seq_index % seq.len();
+                    let t = seq[idx].clone();
+                    // advance cursor
+                    cursor.sequence_index += 1;
+                    let seq_len = seq.len();
+                    if cursor.sequence_index >= seq_len {
+                        if attack.repeat == "once" {
+                            // mark this attack as exhausted
+                            if let Some(r) = engine.remaining.get_mut(attack_idx) {
+                                *r = 0;
+                            }
+                        } else {
+                            cursor.sequence_index = 0;
+                        }
+                    }
+                    (t, None)
+                }
+            } else {
+                ("<no sequence>".to_string(), None)
+            }
+        }
+        "threshold_field" => {
+            let tpl = attack.template.clone().unwrap_or_default();
+            // need special threshold handling
+            (tpl, Some(attack.threshold.as_ref()))
+        }
+        _ => {
+            // single_event
+            (attack.template.clone().unwrap_or_default(), None)
+        }
+    };
+
+    let used_vars = extract_template_vars(&template_str);
+
+    let mut ctx_values: HashMap<String, tera::Value> = HashMap::new();
+    ctx_values.insert("timestamp".to_string(), tera::Value::String(ts_to_rfc3339(ts)));
+    ctx_values.insert("level".to_string(), tera::Value::String(generator.config.log_level.clone()));
+    ctx_values.insert("index".to_string(), tera::Value::Number(tera::Number::from(entry_index)));
+    ctx_values.insert("message".to_string(), tera::Value::String(generator.config.message.clone()));
+
+    // global template_vars
+    for (k, v) in &template_vars {
+        ctx_values.insert(k.clone(), tera::Value::String(v.clone()));
+    }
+
+    // random vars (with intensity)
+    for var_name in &used_vars {
+        if BUILTIN_VARS.contains(&var_name.as_str()) { continue; }
+        if template_vars.contains_key(var_name) { continue; }
+        if attack_var_names.contains(var_name) { continue; }
+        if !all_random_names.contains(var_name) { continue; }
+
+        let should_randomize = generator.config.random_intensity >= 1.0
+            || (generator.config.random_intensity > 0.0 && engine.rng.gen_bool(generator.config.random_intensity));
+        if should_randomize {
+            let val = generate_random_value(var_name, &generator.config, &mut engine.rng);
+            ctx_values.insert(var_name.clone(), tera::Value::String(val));
+        }
+    }
+
+    // attack vars (strongest override)
+    for (k, vc) in &attack_vars {
+        let cycle_pos = engine.var_cycles[attack_idx].entry(k.clone()).or_insert(0);
+        let val = pick_attack_var_value(vc, cycle_pos, &mut engine.rng);
+        ctx_values.insert(k.clone(), tera::Value::String(val.clone()));
+    }
+
+    // threshold_field rejection sampling
+    if let Some(threshold) = named.flatten() {
+        let total = entry_index + 1; // total entries generated for this attack so far
+        let in_bucket = engine.threshold_accepted[attack_idx];
+        let target_count = (threshold.proportion * total as f64).ceil() as u64;
+
+        if in_bucket < target_count {
+            // rejection sampling on the threshold field
+            let threshold_var = &threshold.field;
+            // Save cycle position before rejection attempts to prevent
+            // cycle mode from advancing by >1 per entry
+            let saved_cycle_pos = if attack_var_names.contains(threshold_var) {
+                engine.var_cycles[attack_idx].get(threshold_var).copied()
+            } else {
+                None
+            };
+
+            const MAX_ATTEMPTS: usize = 100;
+            for attempt in 0..MAX_ATTEMPTS {
+                // Restore cycle position so each attempt starts from the same place
+                if let (true, Some(vc)) = (attack_var_names.contains(threshold_var), attack_vars.get(threshold_var)) {
+                    let cycle_pos = engine.var_cycles[attack_idx].entry(threshold_var.clone()).or_insert(0);
+                    if let Some(saved) = saved_cycle_pos {
+                        *cycle_pos = saved;
+                    }
+                    let val = pick_attack_var_value(vc, cycle_pos, &mut engine.rng);
+                    ctx_values.insert(threshold_var.clone(), tera::Value::String(val));
+                } else if all_random_names.contains(threshold_var) {
+                    if !BUILTIN_VARS.contains(&threshold_var.as_str()) && !template_vars.contains_key(threshold_var) {
+                        let val = generate_random_value(threshold_var, &generator.config, &mut engine.rng);
+                        ctx_values.insert(threshold_var.clone(), tera::Value::String(val));
+                    }
+                }
+
+                // Check if the value is in the bucket
+                let val_str = ctx_values.get(threshold_var)
+                    .map(|v| match v {
+                        tera::Value::String(s) => s.clone(),
+                        tera::Value::Number(n) => n.to_string(),
+                        _ => String::new(),
+                    })
+                    .unwrap_or_default();
+                if is_value_in_bucket(&val_str, threshold) {
+                    engine.threshold_accepted[attack_idx] += 1;
+                    break;
+                }
+                if attempt == MAX_ATTEMPTS - 1 {
+                    // last attempt, accept whatever we have
+                    let val_str = ctx_values.get(threshold_var)
+                        .map(|v| match v {
+                            tera::Value::String(s) => s.clone(),
+                            tera::Value::Number(n) => n.to_string(),
+                            _ => String::new(),
+                        })
+                        .unwrap_or_default();
+                    if is_value_in_bucket(&val_str, threshold) {
+                        engine.threshold_accepted[attack_idx] += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let context = Context::from_serialize(&ctx_values).expect("failed to create Tera context");
+
+    // Determine template name for this attack entry
+    let template_name = match attack.attack_type.as_str() {
+        "multi_ordered" => {
+            let seq_len = attack.sequence.as_ref().map_or(1, |s| s.len().max(1));
+            let seq_idx = pre_seq_index % seq_len;
+            format!("attack_{}_seq_{}", attack_idx, seq_idx)
+        }
+        _ => {
+            format!("attack_{}", attack_idx)
+        }
+    };
+    let rendered = match generator.tera.render(&template_name, &context) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Warning: attack template render error: {:?}", e);
+            "<attack render error>".to_string()
+        }
+    };
+
+    LogEntry {
+        timestamp: ts.to_string(),
+        level: generator.config.log_level.clone(),
+        message: rendered,
+    }
+}
+
+impl Generator {
+    pub fn has_attacks(&self) -> bool {
+        self.config.attacks.as_ref().map_or(false, |a| !a.is_empty())
+    }
+
+    fn generate_attack_only(&self) -> Vec<LogEntry> {
+        let attacks = self.config.attacks.as_ref().expect("attacks must be Some");
+        let count = self.config.count;
+        let mut engine = AttackEngine::new(attacks, self.seed, count);
+        let mut entries = Vec::new();
+
+        if attacks.iter().any(|a| a.interleave) {
+            self.generate_attack_interleaved(&mut engine, &mut entries);
+        } else {
+            for (attack_idx, attack) in attacks.iter().enumerate() {
+                let remaining = engine.remaining[attack_idx];
+                for i in 0..remaining {
+                    let entry = render_attack_entry(self, attack, i + 1, attack_idx, &mut engine);
+                    entries.push(entry);
+                }
+            }
+        }
+        entries
+    }
+
+    fn generate_attack_interleaved(&self, engine: &mut AttackEngine, entries: &mut Vec<LogEntry>) {
+        let attacks = self.config.attacks.as_ref().expect("attacks must be Some");
+        let has_normal = !self.config.attack_only;
+        let normal_count = self.config.count;
+        let mut normal_emitted: u64 = 0;
+        let mut current: HashMap<String, String> = HashMap::new();
+        let template_vars = self.config.template_vars.clone().unwrap_or_default();
+        let random_vars = self.config.random_vars.clone().unwrap_or_default();
+        let auto_random: HashSet<String> = AUTO_RANDOM_VARS.iter().map(|s| s.to_string()).collect();
+        let all_random_names: HashSet<String> = auto_random.union(&random_vars.keys().cloned().collect()).cloned().collect();
+
+        loop {
+            let mut stream_weights: Vec<(f64, usize)> = Vec::new();
+
+            if has_normal && normal_emitted < normal_count {
+                stream_weights.push((1.0, usize::MAX));
+            }
+
+            let active_attacks: Vec<usize> = attacks.iter().enumerate()
+                .filter(|(i, a)| a.interleave && engine.attack_remaining(*i) > 0)
+                .map(|(i, _)| i)
+                .collect();
+
+            for &ai in &active_attacks {
+                stream_weights.push((attacks[ai].weight, ai));
+            }
+
+            if stream_weights.is_empty() {
+                break;
+            }
+
+            let total_weight: f64 = stream_weights.iter().map(|(w, _)| w).sum();
+            let roll = engine.rng.gen::<f64>() * total_weight;
+            let mut cum = 0.0;
+            let mut chosen: Option<usize> = None;
+
+            for (w, idx) in &stream_weights {
+                cum += w;
+                if roll < cum {
+                    chosen = Some(*idx);
+                    break;
+                }
+            }
+
+            match chosen {
+                Some(usize::MAX) => {
+                    let entry = if self.templates.is_empty() {
+                        let ts = current_timestamp().to_string();
+                        LogEntry {
+                            timestamp: ts.clone(),
+                            level: self.config.log_level.clone(),
+                            message: format!("{} #{}", self.config.message, normal_emitted + 1),
+                        }
+                    } else {
+                        let ts = current_timestamp();
+                        let mut rng_seeded = StdRng::seed_from_u64(self.seed + normal_emitted);
+                        self.render_single_entry(normal_emitted, &template_vars, &all_random_names, &mut rng_seeded, &mut current, ts)
+                    };
+                    entries.push(entry);
+                    normal_emitted += 1;
+                }
+                Some(attack_idx) => {
+                    let attack = &attacks[attack_idx];
+                    let entry = render_attack_entry(self, attack, entries.len() as u64 + 1, attack_idx, engine);
+                    entries.push(entry);
+                    engine.remaining[attack_idx] = engine.remaining[attack_idx].saturating_sub(1);
+                }
+                None => break,
+            }
+        }
+    }
+
+    fn generate_with_attacks(&self) -> Vec<LogEntry> {
+        let attacks = self.config.attacks.as_ref().expect("attacks must be Some");
+        let count = self.config.count;
+
+        if self.config.attack_only {
+            return self.generate_attack_only();
+        }
+
+        let any_interleave = attacks.iter().any(|a| a.interleave);
+
+        if any_interleave {
+            let mut engine = AttackEngine::new(attacks, self.seed, count);
+            let mut entries = Vec::new();
+            self.generate_attack_interleaved(&mut engine, &mut entries);
+            entries
+        } else {
+            // No interleave: normal first, then attacks sequentially
+            let mut entries = if self.templates.is_empty() {
+                self.generate_legacy(count)
+            } else {
+                self.generate_with_templates(count)
+            };
+
+            let mut engine = AttackEngine::new(attacks, self.seed + count, count);
+            for (attack_idx, attack) in attacks.iter().enumerate() {
+                let remaining = engine.remaining[attack_idx];
+                let base_idx = entries.len() as u64;
+                for i in 0..remaining {
+                    let entry = render_attack_entry(self, attack, base_idx + i + 1, attack_idx, &mut engine);
+                    entries.push(entry);
+                }
+            }
+            entries
+        }
+    }
+
+    fn write_attack_stream(&self, writer: &mut dyn LogWriter) -> Result<(), Box<dyn std::error::Error>> {
+        let attacks = self.config.attacks.as_ref().expect("attacks must be Some");
+        let count = self.config.count;
+
+        if self.config.attack_only {
+            let mut engine = AttackEngine::new(attacks, self.seed, count);
+            let any_interleave = attacks.iter().any(|a| a.interleave);
+
+            if any_interleave {
+                self.write_attack_interleaved(&mut engine, writer)?;
+            } else {
+                for (attack_idx, attack) in attacks.iter().enumerate() {
+                    let remaining = engine.remaining[attack_idx];
+                    for i in 0..remaining {
+                        let entry = render_attack_entry(self, attack, i + 1, attack_idx, &mut engine);
+                        writer.write_entry(&entry)?;
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        let any_interleave = attacks.iter().any(|a| a.interleave);
+
+        if any_interleave {
+            let mut engine = AttackEngine::new(attacks, self.seed, count);
+            self.write_attack_interleaved(&mut engine, writer)?;
+        } else {
+            // Normal streaming first
+            if self.templates.is_empty() {
+                self.write_legacy_stream(count, writer)?;
+            } else {
+                self.write_template_stream(count, writer)?;
+            }
+
+            // Then attack entries
+            let mut engine = AttackEngine::new(attacks, self.seed + count, count);
+            for (attack_idx, attack) in attacks.iter().enumerate() {
+                let remaining = engine.remaining[attack_idx];
+                for i in 0..remaining {
+                    let entry = render_attack_entry(self, attack, i + 1, attack_idx, &mut engine);
+                    writer.write_entry(&entry)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn write_attack_interleaved(&self, engine: &mut AttackEngine, writer: &mut dyn LogWriter) -> Result<(), Box<dyn std::error::Error>> {
+        let attacks = self.config.attacks.as_ref().expect("attacks must be Some");
+        let has_normal = !self.config.attack_only;
+        let normal_count = self.config.count;
+        let mut normal_emitted: u64 = 0;
+        let mut total_emitted: u64 = 0;
+        let mut current: HashMap<String, String> = HashMap::new();
+        let template_vars = self.config.template_vars.clone().unwrap_or_default();
+        let random_vars = self.config.random_vars.clone().unwrap_or_default();
+        let auto_random: HashSet<String> = AUTO_RANDOM_VARS.iter().map(|s| s.to_string()).collect();
+        let all_random_names: HashSet<String> = auto_random.union(&random_vars.keys().cloned().collect()).cloned().collect();
+
+        loop {
+            let mut stream_weights: Vec<(f64, usize)> = Vec::new();
+
+            if has_normal && normal_emitted < normal_count {
+                stream_weights.push((1.0, usize::MAX));
+            }
+
+            let active_attacks: Vec<usize> = (0..attacks.len())
+                .filter(|i| attacks[*i].interleave && engine.attack_remaining(*i) > 0)
+                .collect();
+
+            for &ai in &active_attacks {
+                stream_weights.push((attacks[ai].weight, ai));
+            }
+
+            if stream_weights.is_empty() {
+                break;
+            }
+
+            let total_weight: f64 = stream_weights.iter().map(|(w, _)| w).sum();
+            let roll = engine.rng.gen::<f64>() * total_weight;
+            let mut cum = 0.0;
+            let mut chosen: Option<usize> = None;
+
+            for (w, idx) in &stream_weights {
+                cum += w;
+                if roll < cum {
+                    chosen = Some(*idx);
+                    break;
+                }
+            }
+
+            match chosen {
+                Some(usize::MAX) => {
+                    let entry = if self.templates.is_empty() {
+                        let ts = current_timestamp().to_string();
+                        LogEntry {
+                            timestamp: ts.clone(),
+                            level: self.config.log_level.clone(),
+                            message: format!("{} #{}", self.config.message, normal_emitted + 1),
+                        }
+                    } else {
+                        let ts = current_timestamp();
+                        let mut rng_seeded = StdRng::seed_from_u64(self.seed + normal_emitted);
+                        self.render_single_entry(normal_emitted, &template_vars, &all_random_names, &mut rng_seeded, &mut current, ts)
+                    };
+                    writer.write_entry(&entry)?;
+                    normal_emitted += 1;
+                    total_emitted += 1;
+                }
+                Some(attack_idx) => {
+                    let attack = &attacks[attack_idx];
+                    let entry = render_attack_entry(self, attack, total_emitted + 1, attack_idx, engine);
+                    writer.write_entry(&entry)?;
+                    engine.remaining[attack_idx] = engine.remaining[attack_idx].saturating_sub(1);
+                    total_emitted += 1;
+                }
+                None => break,
             }
         }
 
