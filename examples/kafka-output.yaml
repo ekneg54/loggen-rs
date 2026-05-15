@@ -1,7 +1,19 @@
 # loggen Kafka output example
-# Sends generated logs to a Kafka topic
-# Usage: cargo run -- generate --config examples/kafka-output.yaml
-# Note: Requires librdkafka and building with --features kafka
+#
+# Sends generated logs to a Kafka topic. Uses librdkafka via the rdkafka crate.
+#
+# Usage: cargo run --features kafka -- generate --config examples/kafka-output.yaml
+# Note: Requires librdkafka system library. Build with --features kafka.
+#
+# Reference:
+#   output.target:    "kafka" enables Kafka output
+#   output.kafka:     Kafka-specific configuration block (required when target is "kafka")
+#   output.kafka.brokers:  Comma-separated broker list (default: "localhost:9092")
+#   output.kafka.topic:    Kafka topic name (required)
+#   output.kafka.key_var:  Template variable to use as message key for partitioning
+#   output.kafka.acks:     Required acks: "0", "1" (default), or "all"
+#   output.kafka.timeout_ms: Message delivery timeout (default: 5000)
+#   output.kafka.batch_size: Max messages to buffer before flush (default: 100)
 
 output:
   target: kafka

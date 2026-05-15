@@ -1,7 +1,25 @@
 # loggen example: Brute-force login attack pattern
-# Simulates repeated POST /login attempts from a fixed IP with mostly 401 responses
-# and occasional 200 (successful breach).
+#
+# Simulates repeated POST /login attempts from a fixed IP with mostly 401
+# responses and occasional 200 (successful breach). Uses single_event with
+# attack var overrides for weighted status distribution and fixed attacker IP.
+#
+# Attack type: single_event — each entry is independently rendered using the
+# same template. Per-attack vars override global template_vars and random defaults.
+#
+# Var mode reference:
+#   "random"   (default): chooses a random value from the pool each entry
+#   "cycle":   iterates through values sequentially, wrapping around
+#   "weighted": first values have higher probability (decaying weights)
+#
 # Usage: cargo run -- generate --config=examples/attack-brute-force.yaml
+#
+# See also:
+#   attack-port-scan.yaml      — multi_ordered sequential port scan
+#   attack-ddos.yaml           — threshold_field for biased status distribution
+#   attack-sqli-probe.yaml     — multi_ordered SQL injection probe sequence
+#   attack-credential-stuffing.yaml — single_event with common field freezing
+
 output:
   target: stdout
 

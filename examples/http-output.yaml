@@ -1,6 +1,18 @@
 # loggen HTTP output example
-# Sends generated logs to an HTTP endpoint as NDJSON
+#
+# Sends generated logs to an HTTP endpoint. Supports NDJSON, JSON, and
+# raw text formats with configurable batching, retries, and custom headers.
+#
 # Usage: cargo run -- generate --config examples/http-output.yaml
+#
+# Reference:
+#   output.target:       "http" enables HTTP output
+#   output.url:          HTTP endpoint URL (required when target is "http")
+#   output.batch_size:   Max entries per POST request (default: 100)
+#   output.format:       "ndjson" (default), "json", or "raw"
+#   output.headers:      Optional custom HTTP headers (e.g., Authorization)
+#   output.retry_attempts: Max retries on HTTP error (default: 3)
+#   output.retry_delay_ms: Delay between retries in ms (default: 1000)
 
 output:
   target: http

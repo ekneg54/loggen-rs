@@ -1,6 +1,16 @@
 # loggen example configuration
-# Every option here has a corresponding CLI flag.
-# Usage: cargo run -- generate --config=examples/example.yaml
+#
+# Every config option has a corresponding CLI flag.
+#
+# Usage:
+#   cargo run -- generate --config=examples/example.yaml
+#
+# Reference:
+#   - count:        Number of log entries to generate (default: 1)
+#   - log_level:    Log level string, available as {{ level }} in templates (default: "INFO")
+#   - message:      Log message string, available as {{ message }} in templates (default: "Log entry generated")
+#   - output.target: Output destination: "stdout" (default), "file", "http", or "kafka"
+#   - output.path:  File path when target is "file"
 
 output:
   target: stdout

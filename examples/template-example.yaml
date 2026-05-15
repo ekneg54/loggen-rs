@@ -1,5 +1,29 @@
 # loggen example: template-based generation
+#
+# Uses Tera (Jinja2-inspired) templates to render log entries with
+# built-in random variables, custom template variables, and rotation.
+#
 # Usage: cargo run -- generate --config=examples/template-example.yaml
+#
+# Reference:
+#   logs:               Inline template strings (one per line, rotated through)
+#   template_vars:      Static variable definitions (merged before rendering)
+#   random_intensity:   0.0-1.0 — probability of randomizing auto-vars per entry (default: 1.0)
+#   template_rotation:  "sequential" (default), "random", or "round_robin"
+#   seed:               Optional u64 for reproducible random output
+#   random_vars:        Custom random pools (e.g., codes: [200, 404, 500])
+#
+# Built-in auto-random variables:
+#   {{ ipv4 }}, {{ ipv6 }}, {{ user_agent }}, {{ email }},
+#   {{ url }}, {{ port }}, {{ status }}, {{ user }}
+#
+# Built-in static variables:
+#   {{ timestamp }}, {{ level }}, {{ index }}, {{ message }}
+#
+# Tera filters supported:
+#   {{ timestamp | date(format="%d/%b/%Y:%H:%M:%S %z") }}
+#   {% if condition %}...{% endif %}
+#   {% for item in list %}...{% endfor %}
 
 output:
   target: stdout

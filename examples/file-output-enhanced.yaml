@@ -1,6 +1,15 @@
 # loggen enhanced file output example
-# Demonstrates file rotation, buffering, and progress reporting
+#
+# Demonstrates file rotation, buffering, truncation mode, and progress reporting.
+#
 # Usage: cargo run -- generate --config examples/file-output-enhanced.yaml --progress
+#
+# Reference:
+#   output.append:       false = truncate file on start (default: true = append)
+#   output.rotate_bytes: Auto-rotate after N bytes (renames current -> output.log.1)
+#   output.buffer_size:  Bytes to buffer in memory before flushing to disk (default: 8192)
+#   progress:            Enable progress reporting to stderr
+#   progress_interval:   Report progress every N entries (min 1000, default: 10000)
 
 output:
   target: file

@@ -1,3 +1,18 @@
-# Minimal loggen config — all other fields use defaults.
+# Minimal loggen config
+#
+# All fields except count use defaults. This produces 5 legacy-format log entries:
+#   [timestamp] [INFO] Log entry generated #N
+#
 # Usage: cargo run -- generate --config=examples/minimal.yaml
+#
+# Reference:
+#   count: Number of log entries (default: 1)
+#
+# Other fields and their defaults:
+#   log_level:  "INFO"
+#   message:    "Log entry generated"
+#   output.target: "stdout"
+#   random_intensity: 1.0
+#   template_rotation: "sequential"
+
 count: 5

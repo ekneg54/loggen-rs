@@ -26,8 +26,19 @@ enum Commands {
   loggen generate --count 100
   loggen generate --config examples/example.yaml
   loggen generate --templates ./templates/ --count 10000 --output output.log
+  loggen generate --templates ./templates/ --count 100000 --output large.log --progress --threads 8
+  loggen generate --var app_name=myapp --var host=web01 --templates ./templates/ --count 500
   loggen generate --attack \"brute=single:{{ ipv4 }} - POST /login {{ status }} :50\"
-  loggen generate --validate --config examples/example.yaml")]
+  loggen generate --attack \"scan=multi:probe port 22\" --attack \"scan=multi:probe port 80\" --count 50
+  loggen generate --validate --config examples/example.yaml
+  loggen generate --validate --config examples/template-example.yaml
+  loggen completions bash > /etc/bash_completion.d/loggen
+
+CONFIG REFERENCE:
+  See docs/configuration-reference.md for all config fields
+  See docs/template-guide.md for template syntax and variables
+  See docs/attack-gallery.md for attack pattern types
+  See docs/cli-cheatsheet.md for all CLI flags with examples")]
     Generate {
         /// Output file path (default: stdout)
         #[arg(short, long, value_name = "FILE")]

@@ -1,5 +1,16 @@
 # loggen example: file output
+#
+# Writes 100 ERROR-level log entries to a file. FileWriter uses
+# append mode by default (does not truncate existing content).
+#
 # Usage: cargo run -- generate --config=examples/file-output.yaml
+#
+# Reference:
+#   output.target: "file" enables file output
+#   output.path:   Destination file path (required when target is "file")
+#   output.append: If true (default), append to existing file. If false, truncate.
+#   output.rotate_bytes: Set to auto-rotate after N bytes (renames to .1)
+#   output.buffer_size: Output buffer in bytes before flush (default: 8192)
 
 output:
   target: file
