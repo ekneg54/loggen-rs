@@ -37,7 +37,7 @@ pub fn parse_attack_spec(s: &str) -> Option<(String, AttackConfig)> {
         let preceded_by_space = last_colon > 0 && remaining.as_bytes()[last_colon - 1] == b' ';
         if preceded_by_space {
             if let Ok(c) = potential_count.parse::<u64>() {
-                let template = &remaining[..last_colon - 1];
+                let template = remaining[..last_colon - 1].trim_end();
                 (template, Some(c))
             } else {
                 (remaining, None)
