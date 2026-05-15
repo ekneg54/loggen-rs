@@ -170,12 +170,12 @@ fn validate_config(config: &Config) -> Result<(), String> {
             }
             match attack.attack_type.as_str() {
                 "single_event" => {
-                    if attack.template.as_ref().map_or(true, |t| t.is_empty()) {
+                    if attack.template.as_ref().is_none_or(|t| t.is_empty()) {
                         errors.push(format!("attack[{}] '{}': single_event must have a non-empty template", i, attack.name.as_deref().unwrap_or("<unnamed>")));
                     }
                 }
                 "multi_ordered" => {
-                    if attack.sequence.as_ref().map_or(true, |s| s.is_empty()) {
+                    if attack.sequence.as_ref().is_none_or(|s| s.is_empty()) {
                         errors.push(format!("attack[{}] '{}': multi_ordered must have a non-empty sequence", i, attack.name.as_deref().unwrap_or("<unnamed>")));
                     }
                 }
@@ -183,7 +183,7 @@ fn validate_config(config: &Config) -> Result<(), String> {
                     if attack.threshold.is_none() {
                         errors.push(format!("attack[{}] '{}': threshold_field must have a threshold block", i, attack.name.as_deref().unwrap_or("<unnamed>")));
                     }
-                    if attack.template.as_ref().map_or(true, |t| t.is_empty()) {
+                    if attack.template.as_ref().is_none_or(|t| t.is_empty()) {
                         errors.push(format!("attack[{}] '{}': threshold_field must have a non-empty template", i, attack.name.as_deref().unwrap_or("<unnamed>")));
                     }
                 }
@@ -247,6 +247,7 @@ fn run_validate(config: &Config) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_generate(
     config_path: Option<&PathBuf>,
     output: Option<String>,

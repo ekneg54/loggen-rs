@@ -229,7 +229,7 @@ fn test_generator_template_with_progress() {
     };
     let gen = Generator::new(config);
     let mut writer = StdoutWriter::new();
-    writer.template_mode = true;
+    writer.set_template_mode(true);
     let mut progress = ProgressReporter::new(false, 20, 0.0, 10);
     gen.generate_to_writer_with_progress(&mut writer, &mut progress).unwrap();
     progress.done();

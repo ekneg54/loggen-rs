@@ -13,12 +13,16 @@ pub trait LogWriter {
 // ---- StdoutWriter ----
 
 pub struct StdoutWriter {
-    pub template_mode: bool,
+    pub(crate) template_mode: bool,
 }
 
 impl StdoutWriter {
     pub fn new() -> Self {
         StdoutWriter { template_mode: false }
+    }
+
+    pub fn set_template_mode(&mut self, mode: bool) {
+        self.template_mode = mode;
     }
 }
 
@@ -48,7 +52,7 @@ impl LogWriter for StdoutWriter {
 pub struct FileWriter {
     file: File,
     path: String,
-    pub template_mode: bool,
+    pub(crate) template_mode: bool,
     rotate_bytes: Option<u64>,
     bytes_written: u64,
 }
@@ -78,6 +82,10 @@ impl FileWriter {
 
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    pub fn set_template_mode(&mut self, mode: bool) {
+        self.template_mode = mode;
     }
 }
 
@@ -120,10 +128,10 @@ impl LogWriter for FileWriter {
 // ---- BufferedLogWriter (byte-level buffering) ----
 
 pub struct BufferedLogWriter<W: LogWriter> {
-    pub inner: W,
-    batch: Vec<LogEntry>,
-    buffer_size: u64,
-    estimated_bytes: u64,
+    pub(crate) inner: W,
+    pub(crate) batch: Vec<LogEntry>,
+    pub(crate) buffer_size: u64,
+    pub(crate) estimated_bytes: u64,
 }
 
 impl<W: LogWriter> BufferedLogWriter<W> {

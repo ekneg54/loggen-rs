@@ -120,6 +120,7 @@ pub fn load_attack_config_file(path: &PathBuf) -> Vec<AttackConfig> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_cli_args(
     mut config: Config,
     output: Option<String>,

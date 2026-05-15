@@ -152,7 +152,7 @@ fn load_templates_from_config(config: &Config) -> Result<Vec<String>, String> {
             let mut entries: Vec<_> = fs::read_dir(path)
                 .map_err(|e| format!("failed to read directory '{}': {}", path_str, e))?
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().map_or(false, |ext| ext == "logtpl"))
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "logtpl"))
                 .collect();
             entries.sort_by_key(|e| e.file_name());
             for entry in entries {
@@ -439,7 +439,7 @@ impl Generator {
 
         ctx_values.insert("timestamp".to_string(), tera::Value::String(ts_to_rfc3339(ts)));
         ctx_values.insert("level".to_string(), tera::Value::String(self.config.log_level.clone()));
-        ctx_values.insert("index".to_string(), tera::Value::Number(tera::Number::from((i + 1) as u64)));
+        ctx_values.insert("index".to_string(), tera::Value::Number(tera::Number::from(i + 1)));
         ctx_values.insert("message".to_string(), tera::Value::String(self.config.message.clone()));
 
         for (k, v) in template_vars {
@@ -555,7 +555,7 @@ impl Generator {
                     let mut ctx: HashMap<String, tera::Value> = HashMap::new();
                     ctx.insert("timestamp".into(), tera::Value::String(ts_to_rfc3339(ts)));
                     ctx.insert("level".into(), tera::Value::String(config.log_level.clone()));
-                    ctx.insert("index".into(), tera::Value::Number(tera::Number::from((i + 1) as u64)));
+                    ctx.insert("index".into(), tera::Value::Number(tera::Number::from(i + 1)));
                     ctx.insert("message".into(), tera::Value::String(config.message.clone()));
 
                     for (k, v) in &template_vars {
@@ -586,7 +586,7 @@ impl Generator {
         let mut emitted: u64 = 0;
         while let Ok(entries) = rx.recv() {
             for entry in &entries {
-                writer.write_entry(&entry)?;
+                writer.write_entry(entry)?;
                 emitted += 1;
                 progress.report(emitted);
             }
@@ -600,7 +600,7 @@ impl Generator {
 
 #[derive(Debug, Clone)]
 pub struct AttackCursor {
-    pub sequence_index: usize,
+    sequence_index: usize,
 }
 
 impl AttackCursor {
@@ -609,14 +609,21 @@ impl AttackCursor {
     }
 }
 
+impl Default for AttackCursor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct AttackEngine<'a> {
-    pub attacks: &'a [AttackConfig],
-    pub rng: StdRng,
-    pub cursors: Vec<AttackCursor>,
-    pub remaining: Vec<u64>,
-    pub threshold_accepted: Vec<u64>,
-    pub var_cycles: Vec<HashMap<String, usize>>,
-    pub common_cache: Vec<Option<HashMap<String, String>>>,
+    #[allow(dead_code)]
+    attacks: &'a [AttackConfig],
+    rng: StdRng,
+    cursors: Vec<AttackCursor>,
+    remaining: Vec<u64>,
+    threshold_accepted: Vec<u64>,
+    var_cycles: Vec<HashMap<String, usize>>,
+    common_cache: Vec<Option<HashMap<String, String>>>,
 }
 
 impl<'a> AttackEngine<'a> {
@@ -656,8 +663,8 @@ fn is_value_in_bucket(val_str: &str, threshold: &ThresholdConfig) -> bool {
         Ok(v) => v,
         Err(_) => return false,
     };
-    let above_min = threshold.min.map_or(true, |m| val >= m);
-    let below_max = threshold.max.map_or(true, |m| val <= m);
+    let above_min = threshold.min.is_none_or(|m| val >= m);
+    let below_max = threshold.max.is_none_or(|m| val <= m);
     above_min && below_max
 }
 
@@ -831,11 +838,10 @@ fn render_attack_entry(
                     }
                     let val = pick_attack_var_value(vc, cycle_pos, &mut engine.rng);
                     ctx_values.insert(threshold_var.clone(), tera::Value::String(val));
-                } else if all_random_names.contains(threshold_var) {
-                    if !BUILTIN_VARS.contains(&threshold_var.as_str()) && !template_vars.contains_key(threshold_var) {
-                        let val = generate_random_value(threshold_var, &generator.config, &mut engine.rng);
-                        ctx_values.insert(threshold_var.clone(), tera::Value::String(val));
-                    }
+                } else if all_random_names.contains(threshold_var)
+                    && !BUILTIN_VARS.contains(&threshold_var.as_str()) && !template_vars.contains_key(threshold_var) {
+                    let val = generate_random_value(threshold_var, &generator.config, &mut engine.rng);
+                    ctx_values.insert(threshold_var.clone(), tera::Value::String(val));
                 }
 
                 // Check if the value is in the bucket
@@ -897,7 +903,7 @@ fn render_attack_entry(
 
 impl Generator {
     pub fn has_attacks(&self) -> bool {
-        self.config.attacks.as_ref().map_or(false, |a| !a.is_empty())
+        self.config.attacks.as_ref().is_some_and(|a| !a.is_empty())
     }
 
     fn generate_attack_only(&self) -> Vec<LogEntry> {

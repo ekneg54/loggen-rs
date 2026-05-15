@@ -50,4 +50,27 @@ loggen generate [--count N]    # run binary
 
 ## CI (`.github/workflows/rust.yml`)
 
-`cargo build --verbose` then `cargo test --verbose` on push/PR to `main`. No clippy, rustfmt, or lint checks.
+`cargo build --verbose` then `cargo test --verbose` on push/PR to `main`.
+
+## Security (`.github/workflows/security.yml`)
+
+3-job pipeline on push/PR to `main` + weekly Monday 06:00:
+- **audit** — `cargo audit` (dependency advisory check via `taiki-e/install-action`).
+- **clippy** — `cargo clippy --all-targets -- -D warnings` (deny all lints).
+- **build-and-test** — `cargo build --verbose` + `cargo test --verbose`.
+
+## Security audit findings (variable visibility)
+
+All findings below were remediated in a single pass. Fields marked `pub(crate)` are visible within the crate but hidden from external consumers.
+
+| File | Item | Original | Fixed | Risk |
+|------|------|----------|-------|------|
+| `src/generator.rs:603` | `AttackCursor::sequence_index` | `pub` | private | **High** — external mutation of attack position |
+| `src/generator.rs:612-619` | `AttackEngine` (7 fields) | all `pub` | all private | **High** — RNG state + cursor corruption |
+| `src/output.rs:16` | `StdoutWriter::template_mode` | `pub` | `pub(crate)` | **Medium** — output format control |
+| `src/output.rs:51` | `FileWriter::template_mode` | `pub` | `pub(crate)` | **Medium** — output format control |
+| `src/output.rs:123-126` | `BufferedLogWriter` (4 fields) | all `pub` | all `pub(crate)` | **Medium** — buffer bypass |
+
+### API changes
+- Added `StdoutWriter::set_template_mode(&mut self, mode: bool)` and `FileWriter::set_template_mode(...)` for external consumers (integration tests, benchmarks).
+- Added `Default` impl for `AttackCursor` (clippy requirement after privatising fields).

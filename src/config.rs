@@ -285,7 +285,7 @@ impl Config {
     }
 
     pub fn has_templates(&self) -> bool {
-        self.logs.as_ref().map_or(false, |v| !v.is_empty()) || self.templates.is_some()
+        self.logs.as_ref().is_some_and(|v| !v.is_empty()) || self.templates.is_some()
     }
 }
 

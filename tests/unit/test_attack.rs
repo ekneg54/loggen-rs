@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop, clippy::unnecessary_map_or)]
+
 use std::collections::HashMap;
 
 use loggen::cli::{apply_cli_args, merge_cli_attacks, parse_attack_spec};

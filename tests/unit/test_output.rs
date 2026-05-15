@@ -31,7 +31,8 @@ fn test_stdout_writer_flush() {
 
 #[test]
 fn test_stdout_writer_template_mode() {
-    let mut writer = StdoutWriter { template_mode: true };
+    let mut writer = StdoutWriter::new();
+    writer.set_template_mode(true);
     let entry = LogEntry {
         timestamp: "12345".to_string(),
         level: "INFO".to_string(),
@@ -45,7 +46,7 @@ fn test_file_writer_template_mode() {
     let path = "test_template_mode.log";
     {
         let mut writer = FileWriter::new(path, true, None).unwrap();
-        writer.template_mode = true;
+        writer.set_template_mode(true);
         let entry = LogEntry {
             timestamp: "12345".to_string(),
             level: "INFO".to_string(),
@@ -161,7 +162,7 @@ fn test_file_append_vs_truncate() {
     let path = "test_output_append.log";
     {
         let mut writer = FileWriter::new(path, true, None).unwrap();
-        writer.template_mode = true;
+        writer.set_template_mode(true);
         writer.write_entry(&LogEntry {
             timestamp: "0".to_string(),
             level: "INFO".to_string(),
@@ -171,7 +172,7 @@ fn test_file_append_vs_truncate() {
     }
     {
         let mut writer = FileWriter::new(path, false, None).unwrap();
-        writer.template_mode = true;
+        writer.set_template_mode(true);
         writer.write_entry(&LogEntry {
             timestamp: "0".to_string(),
             level: "INFO".to_string(),
@@ -190,7 +191,7 @@ fn test_file_rotation_bytes() {
     let path = "test_output_rot.log";
     {
         let mut writer = FileWriter::new(path, true, Some(100)).unwrap();
-        writer.template_mode = true;
+        writer.set_template_mode(true);
         for i in 0..30 {
             writer.write_entry(&LogEntry {
                 timestamp: "0".to_string(),
@@ -211,7 +212,7 @@ fn test_file_rotation_single_entry() {
     let path = "test_output_no_rot.log";
     {
         let mut writer = FileWriter::new(path, true, Some(1000)).unwrap();
-        writer.template_mode = true;
+        writer.set_template_mode(true);
         writer.write_entry(&LogEntry {
             timestamp: "0".to_string(),
             level: "INFO".to_string(),
