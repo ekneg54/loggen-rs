@@ -865,3 +865,611 @@ fn test_seeded_attack_reproducibility() {
         assert_eq!(a.message, b.message, "entry {} mismatch", i);
     }
 }
+
+// ── Threshold Boundary Tests ──
+
+#[test]
+fn test_threshold_proportion_zero() {
+    let attack = AttackConfig {
+        name: Some("threshold-zero".to_string()),
+        attack_type: "threshold_field".to_string(),
+        template: Some("status={{ status }}".to_string()),
+        sequence: None,
+        count: Some(500),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: Some(ThresholdConfig {
+            field: "status".to_string(),
+            min: Some(999),
+            max: None,
+            proportion: 0.0,
+        }),
+        vars: None,
+        common: None,
+    };
+    let config = Config {
+        attacks: Some(vec![attack]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 500);
+
+    let in_bucket = entries.iter().filter(|e| {
+        e.message.strip_prefix("status=")
+            .and_then(|s| s.parse::<u64>().ok())
+            .map_or(false, |v| v >= 999)
+    }).count();
+    assert_eq!(in_bucket, 0, "with proportion=0.0, no entries should be forced into bucket, got {}", in_bucket);
+}
+
+#[test]
+fn test_threshold_proportion_one() {
+    let attack = AttackConfig {
+        name: Some("threshold-one".to_string()),
+        attack_type: "threshold_field".to_string(),
+        template: Some("status={{ status }}".to_string()),
+        sequence: None,
+        count: Some(200),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: Some(ThresholdConfig {
+            field: "status".to_string(),
+            min: Some(500),
+            max: Some(599),
+            proportion: 1.0,
+        }),
+        vars: None,
+        common: None,
+    };
+    let config = Config {
+        attacks: Some(vec![attack]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 200);
+
+    let in_bucket = entries.iter().filter(|e| {
+        e.message.strip_prefix("status=")
+            .and_then(|s| s.parse::<u64>().ok())
+            .map_or(false, |v| (500..=599).contains(&v))
+    }).count();
+    assert!(in_bucket >= 199, "with proportion=1.0, at least 199/200 entries should be in bucket [500, 599], got {}/200", in_bucket);
+}
+
+#[test]
+fn test_threshold_min_only() {
+    let attack = AttackConfig {
+        name: Some("min-only".to_string()),
+        attack_type: "threshold_field".to_string(),
+        template: Some("val={{ status }}".to_string()),
+        sequence: None,
+        count: Some(500),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: Some(ThresholdConfig {
+            field: "status".to_string(),
+            min: Some(400),
+            max: None,
+            proportion: 0.5,
+        }),
+        vars: None,
+        common: None,
+    };
+    let config = Config {
+        attacks: Some(vec![attack]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 500);
+
+    let in_bucket = entries.iter().filter(|e| {
+        e.message.strip_prefix("val=")
+            .and_then(|s| s.parse::<u64>().ok())
+            .map_or(false, |v| v >= 400)
+    }).count();
+    let pct = in_bucket as f64 / 500.0;
+    assert!((pct - 0.5).abs() < 0.15,
+        "expected ~50% in bucket (>=400), got {}% ({} / 500)", pct * 100.0, in_bucket);
+}
+
+#[test]
+fn test_threshold_max_only() {
+    let attack = AttackConfig {
+        name: Some("max-only".to_string()),
+        attack_type: "threshold_field".to_string(),
+        template: Some("val={{ status }}".to_string()),
+        sequence: None,
+        count: Some(500),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: Some(ThresholdConfig {
+            field: "status".to_string(),
+            min: None,
+            max: Some(302),
+            proportion: 0.6,
+        }),
+        vars: None,
+        common: None,
+    };
+    let config = Config {
+        attacks: Some(vec![attack]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 500);
+
+    let in_bucket = entries.iter().filter(|e| {
+        e.message.strip_prefix("val=")
+            .and_then(|s| s.parse::<u64>().ok())
+            .map_or(false, |v| v <= 302)
+    }).count();
+    let pct = in_bucket as f64 / 500.0;
+    assert!(pct >= 0.6,
+        "expected >=60% in bucket (<=302), got {}% ({} / 500)", pct * 100.0, in_bucket);
+}
+
+#[test]
+fn test_threshold_invalid_value_non_numeric() {
+    let attack = AttackConfig {
+        name: Some("non-numeric".to_string()),
+        attack_type: "threshold_field".to_string(),
+        template: Some("user={{ user }}".to_string()),
+        sequence: None,
+        count: Some(100),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: Some(ThresholdConfig {
+            field: "user".to_string(),
+            min: Some(100),
+            max: None,
+            proportion: 0.5,
+        }),
+        vars: None,
+        common: None,
+    };
+    let config = Config {
+        attacks: Some(vec![attack]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 100);
+    for e in &entries {
+        assert!(e.message.starts_with("user="), "entry: {}", e.message);
+    }
+}
+
+#[test]
+fn test_config_positive_negative_threshold() {
+    let attack = AttackConfig {
+        name: Some("range-test".to_string()),
+        attack_type: "threshold_field".to_string(),
+        template: Some("status={{ status }}".to_string()),
+        sequence: None,
+        count: Some(500),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: Some(ThresholdConfig {
+            field: "status".to_string(),
+            min: Some(200),
+            max: Some(299),
+            proportion: 0.5,
+        }),
+        vars: None,
+        common: None,
+    };
+    let config = Config {
+        attacks: Some(vec![attack]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 500);
+
+    let in_bucket = entries.iter().filter(|e| {
+        e.message.strip_prefix("status=")
+            .and_then(|s| s.parse::<u64>().ok())
+            .map_or(false, |v| (200..=299).contains(&v))
+    }).count();
+    let pct = in_bucket as f64 / 500.0;
+    assert!(pct >= 0.5,
+        "expected >=50% in [200,299], got {}% ({} / 500)", pct * 100.0, in_bucket);
+}
+
+#[test]
+fn test_threshold_large_scale() {
+    let attack = AttackConfig {
+        name: Some("large-threshold".to_string()),
+        attack_type: "threshold_field".to_string(),
+        template: Some("val={{ status }}".to_string()),
+        sequence: None,
+        count: Some(5000),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: Some(ThresholdConfig {
+            field: "status".to_string(),
+            min: Some(500),
+            max: None,
+            proportion: 0.7,
+        }),
+        vars: None,
+        common: None,
+    };
+    let config = Config {
+        attacks: Some(vec![attack]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 5000);
+
+    let in_bucket = entries.iter().filter(|e| {
+        e.message.strip_prefix("val=")
+            .and_then(|s| s.parse::<u64>().ok())
+            .map_or(false, |v| v >= 500)
+    }).count();
+    let pct = in_bucket as f64 / 5000.0;
+    assert!((pct - 0.7).abs() < 0.08,
+        "expected ~70% in bucket, got {}% ({} / 5000)", pct * 100.0, in_bucket);
+}
+
+// ── Common Field Freezing Regression Tests ──
+
+#[test]
+fn test_common_field_freezing_single_entry() {
+    let attack = AttackConfig {
+        name: Some("common-single".to_string()),
+        attack_type: "single_event".to_string(),
+        template: Some("ip={{ ipv4 }} port={{ port }}".to_string()),
+        sequence: None,
+        count: Some(1),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: None,
+        vars: None,
+        common: Some(vec!["ipv4".to_string(), "port".to_string()]),
+    };
+    let config = Config {
+        attacks: Some(vec![attack]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].message.contains("ip="));
+    assert!(entries[0].message.contains("port="));
+}
+
+#[test]
+fn test_common_field_freezing_values_consistent() {
+    let attack = AttackConfig {
+        name: Some("common-consistent".to_string()),
+        attack_type: "single_event".to_string(),
+        template: Some("ip={{ ipv4 }} idx={{ index }}".to_string()),
+        sequence: None,
+        count: Some(20),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: None,
+        vars: None,
+        common: Some(vec!["ipv4".to_string()]),
+    };
+    let config = Config {
+        attacks: Some(vec![attack]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 20);
+
+    let first = &entries[0].message;
+    let ip_start = first.find("ip=").map(|i| i + 3).unwrap();
+    let ip_end = first[ip_start..].find(' ').map(|i| ip_start + i).unwrap_or(first.len());
+    let expected_ip = &first[ip_start..ip_end];
+
+    for entry in &entries {
+        let ip_start = entry.message.find("ip=").map(|i| i + 3).unwrap();
+        let ip_end = entry.message[ip_start..].find(' ').map(|i| ip_start + i).unwrap_or(entry.message.len());
+        let actual_ip = &entry.message[ip_start..ip_end];
+        assert_eq!(actual_ip, expected_ip, "ipv4 should be frozen across all entries");
+    }
+}
+
+#[test]
+fn test_common_field_with_attack_vars() {
+    let attack = AttackConfig {
+        name: Some("common+vars".to_string()),
+        attack_type: "single_event".to_string(),
+        template: Some("ip={{ ipv4 }} status={{ status }} port={{ port }}".to_string()),
+        sequence: None,
+        count: Some(10),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: None,
+        vars: Some(HashMap::from([(
+            "status".to_string(),
+            AttackVarConfig {
+                values: vec!["200".to_string(), "404".to_string()],
+                mode: "cycle".to_string(),
+            },
+        )])),
+        common: Some(vec!["ipv4".to_string(), "port".to_string()]),
+    };
+    let config = Config {
+        attacks: Some(vec![attack]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 10);
+
+    let first_ip = entries[0].message.split_whitespace().find(|s| s.starts_with("ip=")).unwrap().to_string();
+    for entry in &entries {
+        let ip = entry.message.split_whitespace().find(|s| s.starts_with("ip=")).unwrap();
+        assert_eq!(ip, first_ip, "ipv4 should be frozen");
+    }
+
+    assert!(entries[0].message.contains("status=200"),
+        "first entry should have status=200: {}", entries[0].message);
+    assert!(entries[1].message.contains("status=404"),
+        "second entry should have status=404: {}", entries[1].message);
+    assert!(entries[2].message.contains("status=200"),
+        "third entry should have status=200: {}", entries[2].message);
+}
+
+// ── Attack Interleaving Regression Tests ──
+
+#[test]
+fn test_interleaving_with_seeded_attacks() {
+    let config1 = Config {
+        count: 50,
+        logs: Some(vec!["normal-{{ index }}".to_string()]),
+        seed: Some(42),
+        attacks: Some(vec![
+            AttackConfig {
+                name: Some("a".to_string()),
+                attack_type: "single_event".to_string(),
+                template: Some("a-{{ index }}".to_string()),
+                sequence: None,
+                count: Some(20),
+                interleave: true,
+                weight: 0.5,
+                repeat: "loop".to_string(),
+                threshold: None,
+                vars: None,
+                common: None,
+            },
+            AttackConfig {
+                name: Some("b".to_string()),
+                attack_type: "single_event".to_string(),
+                template: Some("b-{{ index }}".to_string()),
+                sequence: None,
+                count: Some(10),
+                interleave: true,
+                weight: 0.5,
+                repeat: "loop".to_string(),
+                threshold: None,
+                vars: None,
+                common: None,
+            },
+        ]),
+        ..base_config()
+    };
+    let gen1 = Generator::new(config1.clone());
+    let gen2 = Generator::new(config1);
+    let e1 = gen1.generate();
+    let e2 = gen2.generate();
+
+    assert_eq!(e1.len(), 80);
+    assert_eq!(e2.len(), 80);
+    for (i, (a, b)) in e1.iter().zip(e2.iter()).enumerate() {
+        assert_eq!(a.message, b.message, "seeded interleaving should be deterministic at entry {}", i);
+    }
+}
+
+#[test]
+fn test_interleaving_no_normal_attack_only() {
+    let config = Config {
+        count: 100,
+        attacks: Some(vec![
+            AttackConfig {
+                name: Some("x".to_string()),
+                attack_type: "single_event".to_string(),
+                template: Some("x-{{ index }}".to_string()),
+                sequence: None,
+                count: Some(30),
+                interleave: true,
+                weight: 0.5,
+                repeat: "loop".to_string(),
+                threshold: None,
+                vars: None,
+                common: None,
+            },
+            AttackConfig {
+                name: Some("y".to_string()),
+                attack_type: "single_event".to_string(),
+                template: Some("y-{{ index }}".to_string()),
+                sequence: None,
+                count: Some(20),
+                interleave: true,
+                weight: 0.5,
+                repeat: "loop".to_string(),
+                threshold: None,
+                vars: None,
+                common: None,
+            },
+        ]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 50);
+    let x_count = entries.iter().filter(|e| e.message.starts_with("x-")).count();
+    let y_count = entries.iter().filter(|e| e.message.starts_with("y-")).count();
+    assert_eq!(x_count, 30, "expected 30 x entries, got {}", x_count);
+    assert_eq!(y_count, 20, "expected 20 y entries, got {}", y_count);
+}
+
+#[test]
+fn test_random_intensity_with_attacks() {
+    let attack = AttackConfig {
+        name: Some("intensity-test".to_string()),
+        attack_type: "single_event".to_string(),
+        template: Some("app={{ app }} idx={{ index }}".to_string()),
+        sequence: None,
+        count: Some(50),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: None,
+        vars: Some(HashMap::from([(
+            "app".to_string(),
+            AttackVarConfig {
+                values: vec!["loggen".to_string()],
+                mode: "cycle".to_string(),
+            },
+        )])),
+        common: None,
+    };
+    for intensity in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let config = Config {
+            attacks: Some(vec![attack.clone()]),
+            attack_only: true,
+            random_intensity: intensity,
+            seed: Some(42),
+            ..base_config()
+        };
+        let gen = Generator::new(config);
+        let entries = gen.generate();
+        assert_eq!(entries.len(), 50, "failed at intensity={}", intensity);
+        for e in &entries {
+            assert!(e.message.contains("app=loggen"), "entry should contain app value: {}", e.message);
+            assert!(e.message.contains("idx="), "entry should contain index: {}", e.message);
+        }
+    }
+}
+
+#[test]
+fn test_weighted_attack_var_distribution() {
+    let attack = AttackConfig {
+        name: Some("weight-dist".to_string()),
+        attack_type: "single_event".to_string(),
+        template: Some("val={{ x }}".to_string()),
+        sequence: None,
+        count: Some(6000),
+        interleave: false,
+        weight: 0.5,
+        repeat: "loop".to_string(),
+        threshold: None,
+        vars: Some(HashMap::from([(
+            "x".to_string(),
+            AttackVarConfig {
+                values: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+                mode: "weighted".to_string(),
+            },
+        )])),
+        common: None,
+    };
+    let config = Config {
+        attacks: Some(vec![attack]),
+        attack_only: true,
+        seed: Some(42),
+        ..base_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 6000);
+
+    let a = entries.iter().filter(|e| e.message == "val=a").count() as f64 / 6000.0;
+    let b = entries.iter().filter(|e| e.message == "val=b").count() as f64 / 6000.0;
+    let c = entries.iter().filter(|e| e.message == "val=c").count() as f64 / 6000.0;
+
+    assert!((a - 3.0/6.0).abs() < 0.05, "expected a ~50%, got {}%", a * 100.0);
+    assert!((b - 2.0/6.0).abs() < 0.05, "expected b ~33%, got {}%", b * 100.0);
+    assert!((c - 1.0/6.0).abs() < 0.05, "expected c ~17%, got {}%", c * 100.0);
+}
+
+// ── Template var validation in attack context ──
+
+#[test]
+fn test_attack_unknown_var_still_panics() {
+    let result = std::panic::catch_unwind(|| {
+        let attack = AttackConfig {
+            name: Some("bad-var".to_string()),
+            attack_type: "single_event".to_string(),
+            template: Some("{{ definitely_not_defined }}".to_string()),
+            sequence: None,
+            count: Some(5),
+            interleave: false,
+            weight: 0.5,
+            repeat: "loop".to_string(),
+            threshold: None,
+            vars: None,
+            common: None,
+        };
+        let config = Config {
+            attacks: Some(vec![attack]),
+            attack_only: true,
+            ..base_config()
+        };
+        let _gen = Generator::new(config);
+    });
+    assert!(result.is_err(), "unknown var in attack template should panic");
+}
+
+// ── Verify all attack examples deserialize AND generate ──
+
+#[test]
+fn test_all_attack_examples_generate() {
+    let examples = [
+        "examples/attack-brute-force.yaml",
+        "examples/attack-port-scan.yaml",
+        "examples/attack-ddos.yaml",
+        "examples/attack-sqli-probe.yaml",
+        "examples/attack-credential-stuffing.yaml",
+    ];
+    for path in &examples {
+        let config: Config = loggen::read_yaml_file(path).unwrap_or_else(|e| {
+            panic!("failed to deserialize {}: {}", path, e);
+        });
+        let gen = Generator::new(config);
+        let entries = gen.generate();
+        assert!(!entries.is_empty(), "{} should produce entries", path);
+    }
+}

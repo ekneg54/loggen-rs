@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use loggen::output::{ProgressReporter, StdoutWriter};
 use loggen::{Config, Generator, OutputConfig};
 
 fn test_config() -> Config {
@@ -200,5 +201,54 @@ fn test_same_generator_reproducibility() {
     let entries2 = gen.generate_with_count(10);
     for (e1, e2) in entries1.iter().zip(entries2.iter()) {
         assert_eq!(e1.message, e2.message, "same generator should produce same output");
+    }
+}
+
+// ── Generator with progress ──
+
+#[test]
+fn test_generator_legacy_with_progress() {
+    let config = Config {
+        count: 10,
+        ..Config::default()
+    };
+    let gen = Generator::new(config);
+    let mut writer = StdoutWriter::new();
+    let mut progress = ProgressReporter::new(false, 10, 0.0, 5);
+    gen.generate_to_writer_with_progress(&mut writer, &mut progress).unwrap();
+    progress.done();
+}
+
+#[test]
+fn test_generator_template_with_progress() {
+    let config = Config {
+        count: 20,
+        logs: Some(vec!["entry {{ index }}".to_string()]),
+        seed: Some(42),
+        ..Config::default()
+    };
+    let gen = Generator::new(config);
+    let mut writer = StdoutWriter::new();
+    writer.template_mode = true;
+    let mut progress = ProgressReporter::new(false, 20, 0.0, 10);
+    gen.generate_to_writer_with_progress(&mut writer, &mut progress).unwrap();
+    progress.done();
+}
+
+// ── Timestamp caching ──
+
+#[test]
+fn test_generator_timestamp_caching() {
+    let config = Config {
+        count: 100,
+        message: "cached ts".to_string(),
+        ..Config::default()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate();
+    assert_eq!(entries.len(), 100);
+    let first_ts = &entries[0].timestamp;
+    for entry in &entries {
+        assert_eq!(&entry.timestamp, first_ts, "timestamps should be cached");
     }
 }

@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
 
-use loggen::cli::{apply_cli_args, create_writer, load_base_config, write_entries};
+use loggen::cli::{apply_cli_args, create_writer, load_base_config, parse_attack_spec, validate_http_config, validate_kafka_config, write_entries};
 use loggen::config::OutputConfig;
 use loggen::output::{FileWriter, StdoutWriter};
-use loggen::{Config, LogEntry, LogWriter};
+use loggen::{Config, KafkaOutputConfig, LogEntry, LogWriter};
 
 #[test]
 fn test_load_base_config_none_returns_default() {
@@ -189,4 +189,134 @@ fn test_write_entries_multiple_entries() {
 fn test_write_entries_empty() {
     let mut writer: Box<dyn LogWriter> = Box::new(StdoutWriter::new());
     write_entries(&mut writer, &[]);
+}
+
+// ── Config Validation ──
+
+#[test]
+fn test_validate_http_no_url() {
+    let output = OutputConfig {
+        target: "http".to_string(),
+        url: None,
+        ..OutputConfig::default()
+    };
+    let result = validate_http_config(&output);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("url"));
+}
+
+#[test]
+fn test_validate_http_valid() {
+    let output = OutputConfig {
+        target: "http".to_string(),
+        url: Some("http://localhost:8080".to_string()),
+        format: "ndjson".to_string(),
+        ..OutputConfig::default()
+    };
+    assert!(validate_http_config(&output).is_ok());
+}
+
+#[test]
+fn test_validate_kafka_no_config() {
+    let output = OutputConfig {
+        target: "kafka".to_string(),
+        kafka: None,
+        ..OutputConfig::default()
+    };
+    let result = validate_kafka_config(&output);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("kafka"), "got: {:?}", err);
+}
+
+#[test]
+fn test_validate_kafka_valid() {
+    let output = OutputConfig {
+        target: "kafka".to_string(),
+        kafka: Some(KafkaOutputConfig {
+            brokers: "localhost:9092".to_string(),
+            topic: "test-topic".to_string(),
+            key_var: None,
+            acks: "1".to_string(),
+            timeout_ms: 5000,
+            batch_size: 100,
+        }),
+        ..OutputConfig::default()
+    };
+    assert!(validate_kafka_config(&output).is_ok());
+}
+
+// ── create_writer ──
+
+#[test]
+fn test_create_writer_for_stdout() {
+    let config = Config::default();
+    let mut writer = create_writer(&config).unwrap();
+    writer.write_entry(&LogEntry {
+        timestamp: "0".to_string(),
+        level: "INFO".to_string(),
+        message: "test".to_string(),
+    }).unwrap();
+    writer.flush().unwrap();
+}
+
+#[test]
+fn test_create_writer_file_with_buffer() {
+    let path = "test_create_writer_buf.log";
+    let config = Config {
+        output: OutputConfig {
+            target: "file".to_string(),
+            path: Some(path.to_string()),
+            buffer_size: 4096,
+            ..OutputConfig::default()
+        },
+        count: 1,
+        ..Config::default()
+    };
+    let mut writer = create_writer(&config).unwrap();
+    let entry = LogEntry {
+        timestamp: "0".to_string(),
+        level: "TEST".to_string(),
+        message: "writer buffer test".to_string(),
+    };
+    writer.write_entry(&entry).unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+
+    let mut content = String::new();
+    std::fs::File::open(path).unwrap().read_to_string(&mut content).unwrap();
+    assert!(content.contains("writer buffer test"), "content: '{}'", content);
+    std::fs::remove_file(path).unwrap();
+}
+
+// ── apply_cli_args ──
+
+#[test]
+fn test_apply_cli_args_attack_only() {
+    let config = apply_cli_args(
+        Config::default(),
+        None,
+        Some(50),
+        None,
+        None,
+        HashMap::new(),
+        None,
+        vec![],
+        true,
+    );
+    assert!(config.attack_only);
+    assert_eq!(config.count, 50);
+}
+
+// ── parse_attack_spec edge cases ──
+
+#[test]
+fn test_parse_attack_spec_edge_cases() {
+    let (_, config) = parse_attack_spec("test=single:{{ timestamp | date(format=\"%Y\") }} :10").unwrap();
+    assert_eq!(config.count, Some(10));
+    assert!(config.template.as_deref().unwrap().contains("date"));
+
+    let (_, config) = parse_attack_spec("x=single:just template text").unwrap();
+    assert!(config.template.as_deref().unwrap() == "just template text");
+    assert!(config.count.is_none());
 }
