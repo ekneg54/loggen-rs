@@ -223,7 +223,7 @@ impl ProgressReporter {
                 "\r[loggen] {} / {} entries ({}%) [{:.1}s elapsed, {}/s]",
                 current,
                 self.total,
-                if self.total > 0 { current * 100 / self.total } else { 0 },
+                current.checked_mul(100).and_then(|n| n.checked_div(self.total)).unwrap_or(0),
                 elapsed,
                 rate
             );
