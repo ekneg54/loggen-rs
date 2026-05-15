@@ -19,7 +19,7 @@ event data. Below is a summary of the built-in example configurations.
 - **Simulates:** Repeated POST /login from a fixed IP
 - **Key characteristics:** Mostly 401 responses, occasional 200 (breach)
 - **Vars:** Weighted status (`401` x4, `200` x1), fixed attacker IP
-- **Usage:** `cargo run -- generate -c examples/attack-brute-force.yaml`
+- **Usage:** `loggen generate -c examples/attack-brute-force.yaml`
 
 ### Port Scan (`attack-port-scan.yaml`)
 
@@ -27,7 +27,7 @@ event data. Below is a summary of the built-in example configurations.
 - **Simulates:** Sequential port scan with nmap User-Agent
 - **Key characteristics:** CONNECT probes to ports 22, 80, 443, 8080, 3306
 - **Vars:** Fixed scanner IP, repeat: `loop` for continuous scanning
-- **Usage:** `cargo run -- generate -c examples/attack-port-scan.yaml`
+- **Usage:** `loggen generate -c examples/attack-port-scan.yaml`
 
 ### DDoS Ramp-up (`attack-ddos.yaml`)
 
@@ -35,7 +35,7 @@ event data. Below is a summary of the built-in example configurations.
 - **Simulates:** DDoS attack with rotating IPs, biased toward 5xx errors
 - **Key characteristics:** 70% of entries have `status >= 500`
 - **Threshold:** `field: status, min: 500, proportion: 0.7`
-- **Usage:** `cargo run -- generate -c examples/attack-ddos.yaml`
+- **Usage:** `loggen generate -c examples/attack-ddos.yaml`
 
 ### SQL Injection Probe (`attack-sqli-probe.yaml`)
 
@@ -43,7 +43,7 @@ event data. Below is a summary of the built-in example configurations.
 - **Simulates:** Progressive SQL injection probing
 - **Sequence stages:** Normal → OR 1=1 → UNION SELECT → DROP TABLE
 - **Vars:** Fixed attacker IP, repeat: `loop`
-- **Usage:** `cargo run -- generate -c examples/attack-sqli-probe.yaml`
+- **Usage:** `loggen generate -c examples/attack-sqli-probe.yaml`
 
 ### Credential Stuffing (`attack-credential-stuffing.yaml`)
 
@@ -51,7 +51,7 @@ event data. Below is a summary of the built-in example configurations.
 - **Simulates:** Distributed credential stuffing from a single bot
 - **Key characteristics:** `common` fields freeze `ipv4` and `port`, cycled usernames
 - **Vars:** Weighted status (mostly 401/403), cycled usernames
-- **Usage:** `cargo run -- generate -c examples/attack-credential-stuffing.yaml`
+- **Usage:** `loggen generate -c examples/attack-credential-stuffing.yaml`
 
 ## Var Modes
 

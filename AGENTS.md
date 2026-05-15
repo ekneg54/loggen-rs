@@ -9,7 +9,7 @@ cargo build                          # build
 cargo test                           # all tests (unit + integration)
 cargo test --lib                     # inline #[cfg(test)] tests only
 cargo test --test mod                # integration tests only (test binary is "mod")
-cargo run -- generate [--count N]    # run binary
+loggen generate [--count N]    # run binary
 ```
 
 ## Structure

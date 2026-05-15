@@ -7,9 +7,9 @@ patterns — streamed to stdout, file, HTTP, or Kafka.
 ## Quick Start
 
 ```bash
-cargo run -- generate --count 100                                        # 100 basic entries
-cargo run -- generate --templates ./templates/ --count 1000 --output out.log  # Template mode
-cargo run -- generate --config examples/template-example.yaml                 # From YAML
+loggen generate --count 100                                              # 100 basic entries
+loggen generate --templates ./templates/ --count 1000 --output out.log       # Template mode
+loggen generate --config examples/template-example.yaml                       # From YAML
 ```
 
 ## Built-in Variables
@@ -116,7 +116,7 @@ Browse `examples/` for ready-to-run YAML files:
 format templates ready for use:
 
 ```bash
-cargo run -- generate --templates ./templates/ --count 100
+loggen generate --templates ./templates/ --count 100
 ```
 
 ## CLI Overview
