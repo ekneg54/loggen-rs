@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
 
-use loggen::cli::{apply_cli_args, create_writer, load_base_config, parse_attack_spec, validate_http_config, validate_kafka_config, write_entries};
+use loggen::cli::{apply_cli_args, create_writer, load_base_config, validate_http_config, validate_kafka_config, write_entries};
 use loggen::config::OutputConfig;
 use loggen::output::{FileWriter, StdoutWriter};
 use loggen::{Config, KafkaOutputConfig, LogEntry, LogWriter};
@@ -31,8 +31,6 @@ fn test_apply_cli_args_overrides_all() {
         Some("test msg".into()),
         HashMap::new(),
         None,
-        Vec::new(),
-        false,
     );
     assert_eq!(config.count, 99);
     assert_eq!(config.log_level, "ERROR");
@@ -51,7 +49,7 @@ fn test_apply_cli_args_preserves_output_when_not_given() {
         },
         ..Config::default()
     };
-    let config = apply_cli_args(base, None, Some(1), Some("INFO".into()), Some("msg".into()), HashMap::new(), None, Vec::new(), false);
+    let config = apply_cli_args(base, None, Some(1), Some("INFO".into()), Some("msg".into()), HashMap::new(), None);
     assert_eq!(config.output.target, "file");
     assert_eq!(config.output.path.as_deref(), Some("/orig/path"));
 }
@@ -74,8 +72,6 @@ fn test_apply_cli_args_overrides_output_when_given() {
         Some("msg".into()),
         HashMap::new(),
         None,
-        Vec::new(),
-        false,
     );
     assert_eq!(config.output.target, "file");
     assert_eq!(config.output.path.as_deref(), Some("/new/path"));
@@ -290,33 +286,3 @@ fn test_create_writer_file_with_buffer() {
 }
 
 // ── apply_cli_args ──
-
-#[test]
-fn test_apply_cli_args_attack_only() {
-    let config = apply_cli_args(
-        Config::default(),
-        None,
-        Some(50),
-        None,
-        None,
-        HashMap::new(),
-        None,
-        vec![],
-        true,
-    );
-    assert!(config.attack_only);
-    assert_eq!(config.count, 50);
-}
-
-// ── parse_attack_spec edge cases ──
-
-#[test]
-fn test_parse_attack_spec_edge_cases() {
-    let (_, config) = parse_attack_spec("test=single:{{ timestamp | date(format=\"%Y\") }} :10").unwrap();
-    assert_eq!(config.count, Some(10));
-    assert!(config.template.as_deref().unwrap().contains("date"));
-
-    let (_, config) = parse_attack_spec("x=single:just template text").unwrap();
-    assert!(config.template.as_deref().unwrap() == "just template text");
-    assert!(config.count.is_none());
-}

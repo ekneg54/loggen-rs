@@ -131,66 +131,6 @@ fn default_kafka_batch() -> u64 {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ThresholdConfig {
-    pub field: String,
-    #[serde(default)]
-    pub min: Option<u64>,
-    #[serde(default)]
-    pub max: Option<u64>,
-    #[serde(default = "default_threshold_proportion")]
-    pub proportion: f64,
-}
-
-fn default_threshold_proportion() -> f64 {
-    0.5
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AttackVarConfig {
-    pub values: Vec<String>,
-    #[serde(default = "default_attack_var_mode")]
-    pub mode: String,
-}
-
-fn default_attack_var_mode() -> String {
-    "random".to_string()
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AttackConfig {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(rename = "type")]
-    pub attack_type: String,
-    #[serde(default)]
-    pub template: Option<String>,
-    #[serde(default)]
-    pub sequence: Option<Vec<String>>,
-    #[serde(default)]
-    pub count: Option<u64>,
-    #[serde(default)]
-    pub interleave: bool,
-    #[serde(default = "default_attack_weight")]
-    pub weight: f64,
-    #[serde(default = "default_attack_repeat")]
-    pub repeat: String,
-    #[serde(default)]
-    pub threshold: Option<ThresholdConfig>,
-    #[serde(default)]
-    pub vars: Option<HashMap<String, AttackVarConfig>>,
-    #[serde(default)]
-    pub common: Option<Vec<String>>,
-}
-
-fn default_attack_weight() -> f64 {
-    0.5
-}
-
-fn default_attack_repeat() -> String {
-    "loop".to_string()
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub output: OutputConfig,
@@ -216,12 +156,6 @@ pub struct Config {
     pub random_intensity: f64,
     #[serde(default = "default_template_rotation")]
     pub template_rotation: String,
-
-    // Phase 3: Attack Patterns
-    #[serde(default)]
-    pub attacks: Option<Vec<AttackConfig>>,
-    #[serde(default)]
-    pub attack_only: bool,
 
     // Phase 4: Performance & Advanced
     #[serde(default)]
@@ -270,8 +204,6 @@ impl Default for Config {
             random_vars: None,
             random_intensity: default_random_intensity(),
             template_rotation: default_template_rotation(),
-            attacks: None,
-            attack_only: false,
             num_threads: None,
             progress: None,
             progress_interval: default_progress_interval_config(),
@@ -320,8 +252,6 @@ mod tests {
         assert!(config.random_vars.is_none());
         assert_eq!(config.random_intensity, 1.0);
         assert_eq!(config.template_rotation, "sequential");
-        assert!(config.attacks.is_none());
-        assert!(!config.attack_only);
         assert!(config.num_threads.is_none());
         assert!(config.progress.is_none());
         assert_eq!(config.progress_interval, 10000);
@@ -416,68 +346,6 @@ output:
         assert_eq!(config.progress, Some(true));
         assert_eq!(config.progress_interval, 5000);
         assert_eq!(config.num_threads, Some(8));
-    }
-
-    #[test]
-    fn test_config_yaml_with_attacks() {
-        let yaml = r#"
-count: 50
-attacks:
-  - name: brute-force
-    type: single_event
-    template: '{{ ipv4 }} - POST /login {{ status }}'
-    count: 10
-    interleave: true
-    weight: 0.3
-    common:
-      - method
-      - path
-    vars:
-      status:
-        values: ["401", "401", "401", "200"]
-        mode: weighted
-  - name: port-scan
-    type: multi_ordered
-    sequence:
-      - 'probe {{ ipv4 }}:22'
-      - 'probe {{ ipv4 }}:80'
-    count: 20
-    repeat: once
-  - name: ddos
-    type: threshold_field
-    template: '{{ ipv4 }} - {{ status }}'
-    threshold:
-      field: status
-      min: 500
-      proportion: 0.7
-"#;
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
-        let attacks = config.attacks.unwrap();
-        assert_eq!(attacks.len(), 3);
-
-        assert_eq!(attacks[0].name.as_deref(), Some("brute-force"));
-        assert_eq!(attacks[0].attack_type, "single_event");
-        assert_eq!(attacks[0].count, Some(10));
-        assert!(attacks[0].interleave);
-        assert!((attacks[0].weight - 0.3).abs() < 1e-6);
-        let common = attacks[0].common.as_ref().unwrap();
-        assert_eq!(common.len(), 2);
-        assert!(common.contains(&"method".to_string()));
-        assert!(common.contains(&"path".to_string()));
-        let vars = attacks[0].vars.as_ref().unwrap();
-        assert_eq!(vars["status"].values, vec!["401", "401", "401", "200"]);
-        assert_eq!(vars["status"].mode, "weighted");
-
-        assert_eq!(attacks[1].attack_type, "multi_ordered");
-        let seq = attacks[1].sequence.as_ref().unwrap();
-        assert_eq!(seq.len(), 2);
-        assert_eq!(attacks[1].repeat, "once");
-
-        assert_eq!(attacks[2].attack_type, "threshold_field");
-        let th = attacks[2].threshold.as_ref().unwrap();
-        assert_eq!(th.field, "status");
-        assert_eq!(th.min, Some(500));
-        assert!((th.proportion - 0.7).abs() < 1e-6);
     }
 
     #[test]

@@ -19,7 +19,7 @@ output:
   target: kafka
   kafka:
     brokers: "localhost:9092"
-    topic: "app-logs"
+    topic: "consumer"
     key_var: "ipv4"          # Use ipv4 as Kafka message key for partitioning
     acks: "1"                # 0, 1 (default), or all
     timeout_ms: 5000

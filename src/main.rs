@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
-use loggen::cli::{apply_cli_args, create_writer, load_base_config, load_attack_config_file, merge_cli_attacks, parse_attack_spec, validate_http_config, validate_kafka_config};
+use loggen::cli::{apply_cli_args, create_writer, load_base_config, validate_http_config, validate_kafka_config};
 use loggen::{Config, Generator, OutputConfig, ProgressReporter};
 
 #[derive(Parser)]
@@ -28,8 +28,6 @@ enum Commands {
   loggen generate --templates ./templates/ --count 10000 --output output.log
   loggen generate --templates ./templates/ --count 100000 --output large.log --progress --threads 8
   loggen generate --var app_name=myapp --var host=web01 --templates ./templates/ --count 500
-  loggen generate --attack \"brute=single:{{ ipv4 }} - POST /login {{ status }} :50\"
-  loggen generate --attack \"scan=multi:probe port 22\" --attack \"scan=multi:probe port 80\" --count 50
   loggen generate --validate --config examples/example.yaml
   loggen generate --validate --config examples/template-example.yaml
   loggen completions bash > /etc/bash_completion.d/loggen
@@ -63,18 +61,6 @@ CONFIG REFERENCE:
         /// Template file or directory containing .logtpl template files
         #[arg(long = "templates", value_name = "PATH")]
         templates: Option<String>,
-
-        /// Define an inline attack (repeatable, name=type:template[:count])
-        #[arg(long = "attack", value_name = "ATTACK_SPEC", action = clap::ArgAction::Append)]
-        attack: Vec<String>,
-
-        /// Load attacks from YAML file
-        #[arg(long = "attack-config", value_name = "FILE")]
-        attack_config: Option<PathBuf>,
-
-        /// Generate only attack entries (no normal logs)
-        #[arg(long = "attack-only")]
-        attack_only: bool,
 
         /// Validate configuration and exit (no generation)
         #[arg(long)]
@@ -163,37 +149,6 @@ fn validate_config(config: &Config) -> Result<(), String> {
         errors.push(format!("random_intensity must be between 0.0 and 1.0, got {}", config.random_intensity));
     }
 
-    if let Some(ref attacks) = config.attacks {
-        for (i, attack) in attacks.iter().enumerate() {
-            if attack.weight < 0.0 || attack.weight > 1.0 {
-                errors.push(format!("attack[{}] '{}': weight must be between 0.0 and 1.0", i, attack.name.as_deref().unwrap_or("<unnamed>")));
-            }
-            match attack.attack_type.as_str() {
-                "single_event" => {
-                    if attack.template.as_ref().is_none_or(|t| t.is_empty()) {
-                        errors.push(format!("attack[{}] '{}': single_event must have a non-empty template", i, attack.name.as_deref().unwrap_or("<unnamed>")));
-                    }
-                }
-                "multi_ordered" => {
-                    if attack.sequence.as_ref().is_none_or(|s| s.is_empty()) {
-                        errors.push(format!("attack[{}] '{}': multi_ordered must have a non-empty sequence", i, attack.name.as_deref().unwrap_or("<unnamed>")));
-                    }
-                }
-                "threshold_field" => {
-                    if attack.threshold.is_none() {
-                        errors.push(format!("attack[{}] '{}': threshold_field must have a threshold block", i, attack.name.as_deref().unwrap_or("<unnamed>")));
-                    }
-                    if attack.template.as_ref().is_none_or(|t| t.is_empty()) {
-                        errors.push(format!("attack[{}] '{}': threshold_field must have a non-empty template", i, attack.name.as_deref().unwrap_or("<unnamed>")));
-                    }
-                }
-                other => {
-                    errors.push(format!("attack[{}] '{}': unknown attack type '{}'", i, attack.name.as_deref().unwrap_or("<unnamed>"), other));
-                }
-            }
-        }
-    }
-
     match config.output.target.as_str() {
         "http" => {
             if let Err(e) = validate_http_config(&config.output) {
@@ -230,8 +185,7 @@ fn run_validate(config: &Config) {
     match gen_result {
         Ok(_gen) => {
             let num_templates = if config.has_templates() { "present" } else { "none (legacy mode)" };
-            let num_attacks = config.attacks.as_ref().map(|a| a.len()).unwrap_or(0);
-            eprintln!("Config valid: templates {}, {} attack(s), {} entr(y/ies)", num_templates, num_attacks, config.count);
+            eprintln!("Config valid: templates {}, {} entr(y/ies)", num_templates, config.count);
         }
         Err(panic) => {
             let msg = if let Some(s) = panic.downcast_ref::<String>() {
@@ -256,9 +210,6 @@ fn handle_generate(
     message: Option<String>,
     var: Vec<String>,
     templates: Option<String>,
-    attack: Vec<String>,
-    attack_config: Option<PathBuf>,
-    attack_only: bool,
     validate: bool,
     progress: bool,
     no_progress: bool,
@@ -266,24 +217,8 @@ fn handle_generate(
 ) {
     let cli_vars = parse_var_args(var);
 
-    let mut cli_attacks: Vec<loggen::AttackConfig> = Vec::new();
-    for spec in &attack {
-        if let Some((_name, config)) = parse_attack_spec(spec) {
-            cli_attacks.push(config);
-        } else {
-            eprintln!("Warning: ignoring malformed --attack '{}' (expected name=type:template[:count])", spec);
-        }
-    }
-
-    if let Some(ref path) = attack_config {
-        let file_attacks = load_attack_config_file(path);
-        cli_attacks.extend(file_attacks);
-    }
-
-    let cli_attacks = merge_cli_attacks(cli_attacks);
-
     let base = load_base_config(config_path);
-    let mut config = apply_cli_args(base, output, count, level, message, cli_vars, templates, cli_attacks, attack_only);
+    let mut config = apply_cli_args(base, output, count, level, message, cli_vars, templates);
 
     // Apply CLI progress flags
     if progress {
@@ -418,14 +353,11 @@ fn main() {
             message,
             var,
             templates,
-            attack,
-            attack_config,
-            attack_only,
             validate,
             progress,
             no_progress,
             threads,
-        }) => handle_generate(cli.config.as_ref(), output, count, level, message, var, templates, attack, attack_config, attack_only, validate, progress, no_progress, threads),
+        }) => handle_generate(cli.config.as_ref(), output, count, level, message, var, templates, validate, progress, no_progress, threads),
         Some(Commands::Http { url, count }) => handle_http(url, count),
         Some(Commands::Kafka { kafkaconfig, count }) => handle_kafka(kafkaconfig, count),
         Some(Commands::Completions { shell }) => handle_completions(shell),

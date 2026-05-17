@@ -420,15 +420,17 @@ mod kafka_impl {
 #[cfg(feature = "kafka")]
 mod kafka_impl {
     use std::time::Duration;
-    use rdkafka::producer::FutureProducer;
-    use rdkafka::producer::FutureRecord;
+    use rdkafka::producer::BaseProducer;
+    use rdkafka::producer::BaseRecord;
+    use rdkafka::producer::Producer;
     use rdkafka::ClientConfig;
     use crate::config::LogEntry;
     use crate::output::LogWriter;
 
     pub struct KafkaWriter {
-        producer: FutureProducer,
+        producer: BaseProducer,
         topic: String,
+        #[allow(dead_code)]
         key_var: Option<String>,
         batch: Vec<String>,
         batch_size: u64,
@@ -451,7 +453,7 @@ mod kafka_impl {
             config.set("acks", acks);
             config.set("queue.buffering.max.ms", "100");
             config.set("message.timeout.ms", &timeout_ms.to_string());
-            let producer: FutureProducer = config.create()?;
+            let producer: BaseProducer = config.create()?;
             Ok(KafkaWriter {
                 producer,
                 topic: topic.to_string(),
@@ -470,11 +472,15 @@ mod kafka_impl {
             }
             for (i, msg) in self.batch.iter().enumerate() {
                 let key = self.keys.get(i).map(|k| k.as_str()).unwrap_or("");
-                let record = FutureRecord::to(&self.topic).key(key).payload(msg);
-                let _ = self.producer.send(record, Duration::from_secs(5));
-                self.entries_produced += 1;
+                let record = BaseRecord::to(&self.topic).key(key).payload(msg);
+                if let Err((e, _)) = self.producer.send(record) {
+                    self.errors += 1;
+                    eprintln!("Kafka send error: {}", e);
+                } else {
+                    self.entries_produced += 1;
+                }
             }
-            self.producer.flush(Duration::from_secs(5));
+            self.producer.flush(Duration::from_secs(15));
             self.batch.clear();
             self.keys.clear();
             Ok(())

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use loggen::{AttackConfig, Config, Generator};
+use loggen::{Config, Generator};
 
 fn bench_config_legacy() -> Config {
     Config {
@@ -51,28 +51,6 @@ fn bench_config_parallel() -> Config {
     }
 }
 
-fn bench_config_attack_single() -> Config {
-    Config {
-        count: 50_000,
-        attacks: Some(vec![AttackConfig {
-            name: Some("bench-attack".to_string()),
-            attack_type: "single_event".to_string(),
-            template: Some("{{ ipv4 }} - - [{{ timestamp | date(format=\"%d/%b/%Y:%H:%M:%S %z\") }}] \"POST /login HTTP/1.1\" {{ status }} {{ port }} \"-\" \"{{ user_agent }}\"".to_string()),
-            sequence: None,
-            count: Some(50_000),
-            interleave: false,
-            weight: 0.5,
-            repeat: "loop".to_string(),
-            threshold: None,
-            vars: None,
-            common: None,
-        }]),
-        attack_only: true,
-        seed: Some(42),
-        ..Config::default()
-    }
-}
-
 fn bench_legacy(c: &mut Criterion) {
     let config = bench_config_legacy();
     let gen = Generator::new(config);
@@ -105,20 +83,11 @@ fn bench_parallel(c: &mut Criterion) {
     });
 }
 
-fn bench_attack_single(c: &mut Criterion) {
-    let config = bench_config_attack_single();
-    let gen = Generator::new(config);
-    c.bench_function("attack_single_50k", |b| {
-        b.iter(|| black_box(gen.generate()));
-    });
-}
-
 criterion_group!(
     benches,
     bench_legacy,
     bench_template_simple,
     bench_template_random,
     bench_parallel,
-    bench_attack_single,
 );
 criterion_main!(benches);
