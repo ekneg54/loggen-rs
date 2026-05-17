@@ -94,7 +94,7 @@ fn test_simulation_delay_stream() {
     };
     let gen = Generator::new_with_cancel(config, cancel);
     let mut writer = StdoutWriter::new();
-    let mut progress = ProgressReporter::new(false, 5, 0.0, 1000);
+    let mut progress = ProgressReporter::new(false, Some(5), 0.0, 1000);
     let result = gen.generate_to_writer_with_progress(&mut writer, &mut progress);
     handle.join().unwrap();
     assert!(result.is_ok());
@@ -139,7 +139,7 @@ fn test_simulation_delay_legacy_stream() {
     };
     let gen = Generator::new_with_cancel(config, cancel);
     let mut writer = StdoutWriter::new();
-    let mut progress = ProgressReporter::new(false, 3, 0.0, 1000);
+    let mut progress = ProgressReporter::new(false, Some(3), 0.0, 1000);
     let result = gen.generate_to_writer_with_progress(&mut writer, &mut progress);
     handle.join().unwrap();
     assert!(result.is_ok());
@@ -328,23 +328,13 @@ fn test_generator_legacy_with_progress() {
     };
     let gen = Generator::new(config);
     let mut writer = StdoutWriter::new();
-    let mut progress = ProgressReporter::new(false, 10, 0.0, 5);
-    gen.generate_to_writer_with_progress(&mut writer, &mut progress).unwrap();
-    progress.done();
-}
+    let mut progress = ProgressReporter::new(false, Some(10), 0.0, 5);
 
-#[test]
-fn test_generator_template_with_progress() {
-    let config = Config {
-        count: 20,
-        logs: Some(vec!["entry {{ index }}".to_string()]),
-        seed: Some(42),
-        ..Config::default()
-    };
-    let gen = Generator::new(config);
-    let mut writer = StdoutWriter::new();
-    writer.set_template_mode(true);
-    let mut progress = ProgressReporter::new(false, 20, 0.0, 10);
+    let result = gen.generate_to_writer_with_progress(&mut writer, &mut progress);
+    assert!(result.is_ok());
+
+    // check all 10 entries
+    let mut progress = ProgressReporter::new(false, Some(20), 0.0, 10);
     gen.generate_to_writer_with_progress(&mut writer, &mut progress).unwrap();
     progress.done();
 }

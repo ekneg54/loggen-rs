@@ -1,5 +1,8 @@
 # Configuration Reference
 
+The `-c, --config` flag is global and works with all subcommands (`generate`, `http`, `kafka`).
+Values from the config file are overridden by environment variables, which are overridden by CLI flags.
+
 ## Top-level `Config` Fields
 
 | Field | Type | Default | Description |
@@ -38,6 +41,36 @@
 | `append` | `bool` | `true` | Append to existing file vs truncate |
 | `rotate_bytes` | `Option<u64>` | `None` | Rotate file (rename to `.1`) after this many bytes |
 
+## HTTP Output
+
+When `output.target: "http"`, logs are sent as HTTP POST requests to the configured URL.
+Supports batching, retries, custom headers, and multiple body formats.
+
+```yaml
+output:
+  target: http
+  url: https://logs.example.com/ingest
+  batch_size: 500
+  format: ndjson          # ndjson (default), json, or raw
+  headers:
+    Authorization: "Bearer token123"
+  retry_attempts: 3
+  retry_delay_ms: 2000
+```
+
+These fields can also be set via the `loggen http` subcommand with CLI flags or environment variables.
+
+| Field | CLI Flag | Env Var | Default | Description |
+|-------|----------|---------|---------|-------------|
+| `url` | `--url` | — | required | HTTP endpoint URL |
+| `batch_size` | `--batch-size` | `LOGGEN_HTTP_BATCH_SIZE` | `100` | Max entries per POST request |
+| `format` | `--format` | `LOGGEN_HTTP_FORMAT` | `"ndjson"` | Body format: `"ndjson"`, `"json"`, or `"raw"` |
+| `headers` | `--header KEY=VALUE` | `LOGGEN_HTTP_HEADERS` | `None` | Custom HTTP headers (repeatable) |
+| `retry_attempts` | `--retry-attempts` | `LOGGEN_HTTP_RETRY_ATTEMPTS` | `3` | Max retries on failed POST |
+| `retry_delay_ms` | `--retry-delay-ms` | `LOGGEN_HTTP_RETRY_DELAY_MS` | `1000` | Delay between retries (ms) |
+
+Progress reporting is always enabled for HTTP output.
+
 ## `KafkaOutputConfig` Fields
 
 | Field | Type | Default | Description |
@@ -57,3 +90,5 @@
 | `rotation` | `String` | `"none"` | Template selection when simulation is active: `"none"`, `"round_robin"`, or `"random"` |
 
 When `simulation` is configured, generation runs infinitely (stop with Ctrl+C). The `delay` adds a random sleep between each log entry output. The `rotation` controls how templates are cycled (`"none"` = always use first template, `"round_robin"` = cycle in order, `"random"` = pick randomly).
+
+Simulation works with all output targets (`stdout`, `file`, `http`, `kafka`). With `http`/`kafka`, the per-entry `flush()` is skipped so batching is preserved. Progress shows `~N entries` (no fixed goal) and auto-enables.

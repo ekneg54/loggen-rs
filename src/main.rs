@@ -6,7 +6,7 @@ use std::sync::Arc;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use loggen::cli::{apply_cli_args, create_writer, load_base_config, validate_http_config, validate_kafka_config};
-use loggen::{Config, Generator, OutputConfig, ProgressReporter};
+use loggen::{Config, Generator, KafkaOutputConfig, ProgressReporter, SimulationConfig};
 use loggen::generator::parse_delay_range;
 
 #[derive(Parser)]
@@ -95,28 +95,90 @@ CONFIG REFERENCE:
     /// Send logs to an HTTP endpoint
     #[command(after_help = "EXAMPLES:
   loggen http --config examples/http-output.yaml
-  loggen http --url https://logs.example.com/ingest --count 1000")]
+  loggen http --url https://logs.example.com/ingest --count 1000
+  loggen http --url https://logs.example.com/ingest --count 5000 --batch-size 200 --format json
+  loggen http --url https://logs.example.com/ingest --header Authorization=Bearer+token --retry-attempts 5
+  loggen http --url https://logs.example.com/ingest --sim-delay 200")]
     Http {
-        /// base url of the http endpoint
+        /// HTTP endpoint URL (can be set via config file)
         #[arg(short, long)]
-        url: String,
+        url: Option<String>,
 
         /// Number of log entries to generate
         #[arg(short = 'n', long)]
         count: Option<u64>,
+
+        /// Max entries per POST request
+        #[arg(long, env = "LOGGEN_HTTP_BATCH_SIZE")]
+        batch_size: Option<u64>,
+
+        /// Body format: ndjson, json, or raw
+        #[arg(long, env = "LOGGEN_HTTP_FORMAT")]
+        format: Option<String>,
+
+        /// Custom HTTP header (repeatable, KEY=VALUE)
+        #[arg(long = "header", value_name = "KEY=VALUE", action = clap::ArgAction::Append, env = "LOGGEN_HTTP_HEADERS")]
+        header: Vec<String>,
+
+        /// Max retries on failed POST
+        #[arg(long, env = "LOGGEN_HTTP_RETRY_ATTEMPTS")]
+        retry_attempts: Option<u32>,
+
+        /// Delay between retries in milliseconds
+        #[arg(long, env = "LOGGEN_HTTP_RETRY_DELAY_MS")]
+        retry_delay_ms: Option<u64>,
+
+        /// Simulation delay in ms (single value or MIN-MAX range, e.g. "100" or "10-500")
+        #[arg(long, value_name = "MS")]
+        sim_delay: Option<String>,
+
+        /// Simulation rotation mode: none, round_robin, random
+        #[arg(long, value_name = "MODE")]
+        sim_rotation: Option<String>,
     },
 
     /// Send logs to a Kafka topic
     #[command(after_help = "EXAMPLES:
-  loggen kafka --config examples/kafka-output.yaml")]
+  loggen kafka --config examples/kafka-output.yaml
+  loggen kafka --topic app-logs --count 1000
+  loggen kafka --topic app-logs --brokers kafka-1:9092 --count 5000
+  loggen kafka --topic app-logs --sim-delay 500")]
     Kafka {
-        /// kafka config as a mapping of key value pairs
-        #[arg(short, long)]
-        kafkaconfig: String,
-
         /// Number of log entries to generate
         #[arg(short = 'n', long)]
         count: Option<u64>,
+
+        /// Kafka bootstrap servers (default: localhost:9092)
+        #[arg(long, env = "LOGGEN_KAFKA_BROKERS")]
+        brokers: Option<String>,
+
+        /// Kafka topic name (can be set via config file)
+        #[arg(long, env = "LOGGEN_KAFKA_TOPIC")]
+        topic: Option<String>,
+
+        /// Template variable to use as message key
+        #[arg(long, env = "LOGGEN_KAFKA_KEY_VAR")]
+        key_var: Option<String>,
+
+        /// Producer acks: 0, 1, or all (default: 1)
+        #[arg(long, env = "LOGGEN_KAFKA_ACKS")]
+        acks: Option<String>,
+
+        /// Message timeout in milliseconds (default: 5000)
+        #[arg(long, env = "LOGGEN_KAFKA_TIMEOUT_MS")]
+        timeout_ms: Option<u64>,
+
+        /// Max messages per flush (default: 100)
+        #[arg(long, env = "LOGGEN_KAFKA_BATCH_SIZE")]
+        batch_size: Option<u64>,
+
+        /// Simulation delay in ms (single value or MIN-MAX range, e.g. "100" or "10-500")
+        #[arg(long, value_name = "MS")]
+        sim_delay: Option<String>,
+
+        /// Simulation rotation mode: none, round_robin, random
+        #[arg(long, value_name = "MODE")]
+        sim_rotation: Option<String>,
     },
 
     /// Generate shell completion scripts
@@ -297,11 +359,13 @@ fn handle_generate(
     // Set up progress reporter
     let config_ref = generator.config();
     let total_count = config_ref.count;
+    let in_sim = config_ref.simulation.is_some();
     let progress_enabled = config_ref.progress.unwrap_or_else(|| {
         // Auto-enable if count >= 100,000 and not stdout
-        total_count >= 100_000 && config_ref.output.target != "stdout"
+        in_sim || (total_count >= 100_000 && config_ref.output.target != "stdout")
     });
-    let mut progress_reporter = ProgressReporter::new(progress_enabled, total_count, 1.0, config_ref.progress_interval);
+    let total = if in_sim { None } else { Some(total_count) };
+    let mut progress_reporter = ProgressReporter::new(progress_enabled, total, 1.0, config_ref.progress_interval);
 
     if let Err(e) = generator.generate_to_writer_with_progress(&mut *writer, &mut progress_reporter) {
         eprintln!("\nError: generation failed: {}", e);
@@ -311,16 +375,34 @@ fn handle_generate(
     progress_reporter.done();
 }
 
-fn handle_http(url: String, count: Option<u64>, cancel: Arc<AtomicBool>) {
-    let config = Config {
-        output: OutputConfig {
-            target: "http".to_string(),
-            url: Some(url),
-            ..OutputConfig::default()
-        },
-        count: count.unwrap_or(100),
-        ..Config::default()
-    };
+#[allow(clippy::too_many_arguments)]
+fn handle_http(
+    config_path: Option<&PathBuf>,
+    url: Option<String>,
+    count: Option<u64>,
+    batch_size: Option<u64>,
+    format: Option<String>,
+    header: Vec<String>,
+    retry_attempts: Option<u32>,
+    retry_delay_ms: Option<u64>,
+    sim_delay: Option<String>,
+    sim_rotation: Option<String>,
+    cancel: Arc<AtomicBool>,
+) {
+    let mut config = load_base_config(config_path);
+    config.output.target = "http".to_string();
+
+    if let Some(url) = url { config.output.url = Some(url); }
+    if let Some(count) = count { config.count = count; }
+    if let Some(b) = batch_size { config.output.batch_size = b; }
+    if let Some(f) = format { config.output.format = f; }
+    if let Some(r) = retry_attempts { config.output.retry_attempts = r; }
+    if let Some(d) = retry_delay_ms { config.output.retry_delay_ms = d; }
+    let cli_headers = parse_var_args(header);
+    if !cli_headers.is_empty() { config.output.headers = Some(cli_headers); }
+    apply_sim_args(&mut config, sim_delay, sim_rotation);
+
+    config.progress = Some(true);
 
     if let Err(e) = validate_http_config(&config.output) {
         eprintln!("Error: {}", e);
@@ -333,21 +415,79 @@ fn handle_http(url: String, count: Option<u64>, cancel: Arc<AtomicBool>) {
             eprintln!("Error: failed to create HTTP writer: {}", e);
             std::process::exit(1);
         });
-    if let Err(e) = generator.generate_to_writer(&mut *writer) {
-        eprintln!("Error: generation failed: {}", e);
+
+    let config_ref = generator.config();
+    let in_sim = config_ref.simulation.is_some();
+    let total = if in_sim { None } else { Some(config_ref.count) };
+    let mut progress_reporter = ProgressReporter::new(true, total, 1.0, config_ref.progress_interval);
+
+    if let Err(e) = generator.generate_to_writer_with_progress(&mut *writer, &mut progress_reporter) {
+        eprintln!("\nError: generation failed: {}", e);
         std::process::exit(1);
+    }
+
+    progress_reporter.done();
+}
+
+fn apply_sim_args(config: &mut Config, sim_delay: Option<String>, sim_rotation: Option<String>) {
+    if sim_delay.is_some() || sim_rotation.is_some() {
+        let mut sim = config.simulation.take().unwrap_or(SimulationConfig {
+            delay: None,
+            rotation: "none".to_string(),
+        });
+        if let Some(d) = sim_delay {
+            sim.delay = Some(d);
+        }
+        if let Some(r) = sim_rotation {
+            sim.rotation = r;
+        }
+        config.simulation = Some(sim);
     }
 }
 
-fn handle_kafka(_kafkaconfig: String, count: Option<u64>, cancel: Arc<AtomicBool>) {
-    let config = Config {
-        output: OutputConfig {
-            target: "kafka".to_string(),
-            ..OutputConfig::default()
-        },
-        count: count.unwrap_or(100),
-        ..Config::default()
-    };
+fn ensure_kafka_config(config: &mut Config) -> &mut KafkaOutputConfig {
+    config.output.kafka.get_or_insert_with(|| KafkaOutputConfig {
+        topic: String::new(),
+        brokers: "localhost:9092".to_string(),
+        key_var: None,
+        acks: "1".to_string(),
+        timeout_ms: 5000,
+        batch_size: 100,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_kafka(
+    config_path: Option<&PathBuf>,
+    count: Option<u64>,
+    brokers: Option<String>,
+    topic: Option<String>,
+    key_var: Option<String>,
+    acks: Option<String>,
+    timeout_ms: Option<u64>,
+    batch_size: Option<u64>,
+    sim_delay: Option<String>,
+    sim_rotation: Option<String>,
+    cancel: Arc<AtomicBool>,
+) {
+    let mut config = load_base_config(config_path);
+    config.output.target = "kafka".to_string();
+
+    if let Some(count) = count { config.count = count; }
+    if let Some(b) = brokers { ensure_kafka_config(&mut config).brokers = b; }
+    if let Some(t) = topic { ensure_kafka_config(&mut config).topic = t; }
+    if let Some(kv) = key_var { ensure_kafka_config(&mut config).key_var = Some(kv); }
+    if let Some(a) = acks { ensure_kafka_config(&mut config).acks = a; }
+    if let Some(t) = timeout_ms { ensure_kafka_config(&mut config).timeout_ms = t; }
+    if let Some(b) = batch_size { ensure_kafka_config(&mut config).batch_size = b; }
+    apply_sim_args(&mut config, sim_delay, sim_rotation);
+
+    config.progress = Some(true);
+
+    if let Err(e) = validate_kafka_config(&config.output) {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
 
     let generator = Generator::new_with_cancel(config, cancel);
     let mut writer = create_writer(generator.config())
@@ -355,10 +495,18 @@ fn handle_kafka(_kafkaconfig: String, count: Option<u64>, cancel: Arc<AtomicBool
             eprintln!("Error: failed to create Kafka writer: {}", e);
             std::process::exit(1);
         });
-    if let Err(e) = generator.generate_to_writer(&mut *writer) {
-        eprintln!("Error: generation failed: {}", e);
+
+    let config_ref = generator.config();
+    let in_sim = config_ref.simulation.is_some();
+    let total = if in_sim { None } else { Some(config_ref.count) };
+    let mut progress_reporter = ProgressReporter::new(true, total, 1.0, config_ref.progress_interval);
+
+    if let Err(e) = generator.generate_to_writer_with_progress(&mut *writer, &mut progress_reporter) {
+        eprintln!("\nError: generation failed: {}", e);
         std::process::exit(1);
     }
+
+    progress_reporter.done();
 }
 
 fn handle_completions(shell: String) {
@@ -406,8 +554,8 @@ fn main() {
             sim_delay,
             sim_rotation,
         }) => handle_generate(cli.config.as_ref(), output, count, level, message, var, templates, validate, progress, no_progress, threads, sim_delay, sim_rotation, cancel),
-        Some(Commands::Http { url, count }) => handle_http(url, count, cancel),
-        Some(Commands::Kafka { kafkaconfig, count }) => handle_kafka(kafkaconfig, count, cancel),
+        Some(Commands::Http { url, count, batch_size, format, header, retry_attempts, retry_delay_ms, sim_delay, sim_rotation }) => handle_http(cli.config.as_ref(), url, count, batch_size, format, header, retry_attempts, retry_delay_ms, sim_delay, sim_rotation, cancel),
+        Some(Commands::Kafka { count, brokers, topic, key_var, acks, timeout_ms, batch_size, sim_delay, sim_rotation }) => handle_kafka(cli.config.as_ref(), count, brokers, topic, key_var, acks, timeout_ms, batch_size, sim_delay, sim_rotation, cancel),
         Some(Commands::Completions { shell }) => handle_completions(shell),
         None => {
             println!("No command provided. Use --help for usage information.");

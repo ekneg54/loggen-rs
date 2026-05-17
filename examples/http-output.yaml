@@ -25,6 +25,6 @@ output:
   retry_attempts: 3
   retry_delay_ms: 2000
 
-count: 10000
+count: 2000
 log_level: INFO
 templates: ./templates/

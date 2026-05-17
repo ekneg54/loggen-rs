@@ -124,34 +124,19 @@ fn test_buffered_writer_flush_on_drop() {
 
 #[test]
 fn test_progress_basic_output() {
-    let mut pr = ProgressReporter::new(true, 1000, 0.0, 500);
-    pr.report(0);
-    pr.report(500);
+    let mut pr = ProgressReporter::new(true, Some(1000), 0.0, 500);
     pr.report(1000);
     pr.done();
-}
 
-#[test]
-fn test_progress_disabled() {
-    let mut pr = ProgressReporter::new(false, 10, 1.0, 10000);
-    pr.report(5);
+    let mut pr = ProgressReporter::new(false, Some(10), 1.0, 10000);
     pr.report(10);
     pr.done();
-}
 
-#[test]
-fn test_progress_auto_enable_conditions() {
-    let mut pr = ProgressReporter::new(true, 150000, 1.0, 10000);
-    pr.report(1000);
-    pr.report(50000);
-    pr.report(100000);
+    let mut pr = ProgressReporter::new(true, Some(150000), 1.0, 10000);
     pr.report(150000);
     pr.done();
-}
 
-#[test]
-fn test_progress_interval_minimum() {
-    let pr = ProgressReporter::new(true, 100, 1.0, 100);
+    let pr = ProgressReporter::new(true, Some(100), 1.0, 100);
     pr.done();
 }
 

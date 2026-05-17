@@ -186,13 +186,13 @@ pub struct ProgressReporter {
     last_report: Instant,
     interval_secs: f64,
     entry_interval: u64,
-    total: u64,
+    total: Option<u64>,
     last_reported_entry: u64,
     enabled: bool,
 }
 
 impl ProgressReporter {
-    pub fn new(enabled: bool, total: u64, interval_secs: f64, entry_interval: u64) -> Self {
+    pub fn new(enabled: bool, total: Option<u64>, interval_secs: f64, entry_interval: u64) -> Self {
         ProgressReporter {
             start: Instant::now(),
             last_report: Instant::now(),
@@ -219,14 +219,22 @@ impl ProgressReporter {
             } else {
                 0
             };
-            eprint!(
-                "\r[loggen] {} / {} entries ({}%) [{:.1}s elapsed, {}/s]",
-                current,
-                self.total,
-                current.checked_mul(100).and_then(|n| n.checked_div(self.total)).unwrap_or(0),
-                elapsed,
-                rate
-            );
+            match self.total {
+                Some(total) => eprint!(
+                    "\r[loggen] {} / {} entries ({}%) [{:.1}s elapsed, {}/s]",
+                    current,
+                    total,
+                    current.checked_mul(100).and_then(|n| n.checked_div(total)).unwrap_or(0),
+                    elapsed,
+                    rate
+                ),
+                None => eprint!(
+                    "\r[loggen] ~{} entries [{:.1}s elapsed, {}/s]",
+                    current,
+                    elapsed,
+                    rate
+                ),
+            }
             self.last_report = now;
             self.last_reported_entry = current;
         }
@@ -237,15 +245,25 @@ impl ProgressReporter {
             return;
         }
         let elapsed = self.start.elapsed().as_secs_f64();
-        let rate = if elapsed > 0.0 {
-            (self.total as f64 / elapsed) as u64
-        } else {
-            0
-        };
-        eprintln!(
-            "\r[loggen] Done: {} entries in {:.1}s ({}/s)",
-            self.total, elapsed, rate
-        );
+        match self.total {
+            Some(total) => {
+                let rate = if elapsed > 0.0 {
+                    (total as f64 / elapsed) as u64
+                } else {
+                    0
+                };
+                eprintln!(
+                    "\r[loggen] Done: {} entries in {:.1}s ({}/s)",
+                    total, elapsed, rate
+                );
+            }
+            None => {
+                eprintln!(
+                    "\r[loggen] Stopped: {} entries generated in {:.1}s",
+                    self.last_reported_entry, elapsed
+                );
+            }
+        }
     }
 }
 
@@ -645,15 +663,14 @@ mod tests {
 
     #[test]
     fn test_progress_reporter_basic() {
-        let mut pr = ProgressReporter::new(true, 100, 0.0, 50);
-        pr.report(0);
+        let mut pr = ProgressReporter::new(true, Some(100), 0.0, 50);
+        assert!(pr.enabled);
+        pr.report(1);
         pr.report(50);
+        pr.report(100);
         pr.done();
-    }
 
-    #[test]
-    fn test_progress_reporter_disabled() {
-        let mut pr = ProgressReporter::new(false, 100, 0.0, 50);
+        let mut pr = ProgressReporter::new(false, Some(100), 0.0, 50);
         pr.report(50);
         pr.done();
     }

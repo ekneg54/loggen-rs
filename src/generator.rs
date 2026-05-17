@@ -362,7 +362,7 @@ impl Generator {
     }
 
     pub fn generate_to_writer(&self, writer: &mut dyn LogWriter) -> Result<(), Box<dyn std::error::Error>> {
-        let mut progress = ProgressReporter::new(false, self.config.count, 1.0, 10000);
+        let mut progress = ProgressReporter::new(false, Some(self.config.count), 1.0, 10000);
         self.generate_to_writer_with_progress(writer, &mut progress)
     }
 
@@ -495,7 +495,7 @@ impl Generator {
                 level: self.config.log_level.clone(),
                 message: format!("{} #{}", self.config.message, i + 1),
             })?;
-            if self.delay_range.is_some() {
+            if self.delay_range.is_some() && self.config.output.target == "file" {
                 writer.flush()?;
             }
             progress.report(i + 1);
@@ -522,7 +522,7 @@ impl Generator {
         while (infinite || i < count) && !self.cancelled.load(Ordering::Relaxed) {
             let entry = self.render_single_entry(i, &template_vars, &all_random_names, &mut rng, &mut current, ts);
             writer.write_entry(&entry)?;
-            if self.delay_range.is_some() {
+            if self.delay_range.is_some() && self.config.output.target == "file" {
                 writer.flush()?;
             }
             progress.report(i + 1);
