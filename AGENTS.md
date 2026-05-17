@@ -1,6 +1,6 @@
 # loggen-rs
 
-Early-stage Rust log generator. Binary + library crate. Phases 1–2 (foundation, template system + randomization) of `Plan.md` are implemented. `Http`/`Kafka` subcommands and Phase 4+ are stubs.
+Early-stage Rust log generator. Binary + library crate. Phase 1 (§1.1–1.2: foundation, template system + randomization) of `Plan.md` is implemented. §1.3 features (HttpWriter, KafkaWriter, buffering, progress, completions) and Phase 2 are stubs.
 
 ## Commands
 
