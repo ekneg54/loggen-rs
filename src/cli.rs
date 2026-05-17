@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::{OutputConfig, SimulationConfig};
 use crate::output::{BufferedLogWriter, FileWriter, HttpWriter, StdoutWriter};
 use crate::{Config, LogWriter};
 
 pub fn load_base_config(config_path: Option<&PathBuf>) -> Config {
-    match config_path {
+    let mut config = match config_path {
         Some(path) => Config::from_file(path).unwrap_or_else(|_| {
             eprintln!(
                 "Warning: could not read config file '{}', using defaults",
@@ -15,7 +15,17 @@ pub fn load_base_config(config_path: Option<&PathBuf>) -> Config {
             Config::default()
         }),
         None => Config::default(),
+    };
+
+    // Auto-detect system-installed templates as fallback
+    if config.templates.is_none() && config.logs.is_none() {
+        let system_path = "/usr/share/loggen/templates";
+        if Path::new(system_path).is_dir() {
+            config.templates = Some(system_path.to_string());
+        }
     }
+
+    config
 }
 
 #[allow(clippy::too_many_arguments)]
