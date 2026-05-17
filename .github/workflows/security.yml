@@ -2,7 +2,6 @@ name: Security
 
 on:
   push:
-    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
   schedule:
@@ -33,6 +32,27 @@ jobs:
           components: clippy
       - name: Check clippy (deny warnings)
         run: cargo clippy --all-targets -- -D warnings
+
+  trivy-scan:
+    name: Trivy vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-target: '.'
+          scan-ref: '.'
+          trivy-config: .trivy.yml
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:latest
+      - name: Upload Trivy results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-results
+          path: trivy-results.sarif
 
   build-and-test:
     name: Build & test
