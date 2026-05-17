@@ -822,6 +822,128 @@ pub fn create_writer(config: &Config) -> Result<Box<dyn LogWriter>, Box<dyn std:
 - **User Experience (UX) Review:** Verify all `--help` and `after_help` text is clear and all `Completions` scripts work as expected across shells.
 - **Release Preparation:** Tagging the version in Git and preparing the GitHub release notes.
 
+## Phase 6: Remove Attack Pattern Feature (Refactor)
+
+This phase removes the entire attack pattern generation system (formerly Phase 3), including all associated config types, CLI flags, template validation, generator engine, tests, documentation, and example files. This simplifies the codebase, removes ~1700 lines, and eliminates the `--attack`/`--attack-config`/`--attack-only` CLI surface.
+
+**Why:** The attack feature added significant complexity (3 attack types, interleaving logic, rejection sampling, variable modes, common fields) and is no longer needed in the project scope.
+
+### 6.1 Remove Config Types and Fields (`src/config.rs`)
+
+1. Delete the following structs:
+   - `ThresholdConfig` + `default_threshold_proportion()`
+   - `AttackVarConfig` + `default_attack_var_mode()`
+   - `AttackConfig` + `default_attack_weight()` + `default_attack_repeat()`
+
+2. Remove from `Config` struct: `attacks` and `attack_only` fields.
+
+3. Remove from `Config::default()`: `attacks: None` and `attack_only: false`.
+
+4. Delete inline test `test_config_yaml_with_attacks`.
+
+5. Remove attack assertions from `test_config_defaults`.
+
+### 6.2 Remove Attack Engine (`src/generator.rs`)
+
+1. Remove import of `AttackConfig`, `AttackVarConfig`, `ThresholdConfig`.
+
+2. Remove attack template registration + validation loop in `Generator::new()`.
+
+3. Redirect `generate()` + `generate_to_writer()` to remove attack dispatch (remove `if self.has_attacks()` branches).
+
+4. Remove all types and functions:
+   - `AttackCursor` struct, impl, Default
+   - `AttackEngine` struct + impl (`new`, `is_exhausted`, `attack_remaining`)
+   - `is_value_in_bucket()`
+   - `pick_attack_var_value()`
+   - `render_attack_entry()`
+   - `has_attacks()`
+   - `generate_attack_only()`
+   - `generate_attack_interleaved()`
+   - `generate_with_attacks()`
+   - `write_attack_stream()`
+   - `write_attack_interleaved()`
+
+### 6.3 Remove Attack CLI Parsing (`src/cli.rs`)
+
+1. Remove `AttackConfig` import.
+
+2. Delete functions:
+   - `parse_attack_spec()`
+   - `merge_cli_attacks()`
+   - `load_attack_config_file()`
+
+3. Simplify `apply_cli_args`: remove `attack_configs` and `attack_only` params + merging logic.
+
+### 6.4 Remove Attack CLI Flags (`src/main.rs`)
+
+1. Remove `--attack`, `--attack-config`, `--attack-only` CLI flags from `Generate` subcommand and struct fields.
+
+2. Remove attack parsing + attack-config loading from `handle_generate()`.
+
+3. Remove attack validation block from `validate_config()`.
+
+4. Remove `config.attacks` count from `run_validate()` output.
+
+5. Update imports and match arm destructuring.
+
+### 6.5 Update Public API (`src/lib.rs`)
+
+1. Remove from config re-exports: `AttackConfig`, `AttackVarConfig`, `ThresholdConfig`.
+
+2. Remove from generator re-exports: `AttackCursor`, `AttackEngine`.
+
+### 6.6 Remove Test Files and Test References
+
+1. **Delete `tests/unit/test_attack.rs`** entirely.
+
+2. **Remove from `tests/unit/mod.rs`**: `pub mod test_attack;`.
+
+3. **`tests/unit/cli.rs`** — Remove `test_apply_cli_args_attack_only` and `test_parse_attack_spec_edge_cases`.
+
+4. **Remove `attacks`/`attack_only` fields** from `test_config()` / `base_config()` helpers in `tests/unit/test_generator.rs` and `tests/unit/test_date_filter.rs`.
+
+### 6.7 Remove Attack Example Files
+
+Delete 5 YAML files: `examples/attack-brute-force.yaml`, `examples/attack-port-scan.yaml`, `examples/attack-ddos.yaml`, `examples/attack-sqli-probe.yaml`, `examples/attack-credential-stuffing.yaml`.
+
+### 6.8 Update Documentation
+
+1. Delete `docs/attack-gallery.md`.
+
+2. `docs/configuration-reference.md` — Remove attack-related config rows and tables.
+
+3. `docs/cli-cheatsheet.md` — Remove `--attack`, `--attack-config`, `--attack-only` rows.
+
+### 6.9 Update `AGENTS.md`
+
+1. Update Phase description (line 3): change "Phases 1–3" to "Phases 1–2".
+
+2. Remove attack function descriptions in Structure section.
+
+3. Remove attack streaming and quirk bullet points.
+
+4. Remove `AttackCursor`/`AttackEngine` security audit findings and API changes section.
+
+### 6.10 Update `Plan.md`
+
+1. Update top-level description (line 3) to reflect new phase structure.
+
+2. Remove old Phase 3 content (lines 96–295) or replace with a stub noting it was removed in Phase 6.
+
+### 6.11 Build and Test Verification
+
+```sh
+cargo build
+cargo test --lib
+cargo test --test mod
+cargo clippy --all-targets -- -D warnings
+```
+
+No new dependencies required. This is purely a deletion/refactor phase.
+
+---
+
 ## Key Dependencies to Consider
 
 ### Core Rust Crates:
