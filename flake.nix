@@ -30,6 +30,8 @@
             cp -r templates $out/usr/share/loggen/templates
             cp -r examples $out/usr/share/loggen/examples
             cp -r docs $out/usr/share/loggen/docs
+            cp Cargo.lock $out/usr/share/loggen/Cargo.lock
+            cp Cargo.toml $out/usr/share/loggen/Cargo.toml
           '';
           dontBuild = true;
         };
