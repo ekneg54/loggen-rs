@@ -236,6 +236,102 @@ Also update `main.rs` help text with a simulation example.
 
 ---
 
+## Phase 3: CLI & Env Overload for HTTP/Kafka Config
+
+### 3.1 Goal
+
+Allow all HTTP and Kafka output settings to be set via CLI flags **and** environment variables, not only through YAML config files. This makes `loggen http` and `loggen kafka` fully self-sufficient subcommands.
+
+### 3.2 HTTP Subcommand — New CLI Args
+
+Add these to the `Http` variant in `src/main.rs`, all with clap `env` attributes:
+
+| Arg | Type | Env var | Default | Description |
+|---|---|---|---|---|
+| `--url` (exists) | `String` | — | required | HTTP endpoint URL |
+| `-n/--count` (exists) | `u64` | — | `100` | Number of entries |
+| `--batch-size` | `u64` | `LOGGEN_HTTP_BATCH_SIZE` | `100` | Max entries per POST |
+| `--format` | `String` | `LOGGEN_HTTP_FORMAT` | `"ndjson"` | Body format: `ndjson`, `json`, `raw` |
+| `--header KEY=VALUE` (repeatable) | `Vec<String>` | `LOGGEN_HTTP_HEADERS` | — | Custom HTTP headers |
+| `--retry-attempts` | `u32` | `LOGGEN_HTTP_RETRY_ATTEMPTS` | `3` | Max retries on failure |
+| `--retry-delay-ms` | `u64` | `LOGGEN_HTTP_RETRY_DELAY_MS` | `1000` | Delay between retries (ms) |
+
+Env var precedence: CLI arg > env var > default.
+
+### 3.3 HTTP Subcommand — Handler Changes (`handle_http`)
+
+Accept all new params and construct a fully-populated `OutputConfig`:
+
+```rust
+fn handle_http(
+    url: String,
+    count: Option<u64>,
+    batch_size: u64,
+    format: String,
+    headers: Vec<String>,       // parse "KEY=VALUE" pairs
+    retry_attempts: u32,
+    retry_delay_ms: u64,
+    cancel: Arc<AtomicBool>,
+)
+```
+
+- Parse `--header` args with the same `KEY=VALUE` split used by `--var` in `handle_generate`.
+- Apply the count default (`unwrap_or(100)`) at the config level.
+- Validate via `validate_http_config()` before creating the writer.
+
+### 3.4 Kafka Subcommand — New CLI Args
+
+Replace the current `--kafkaconfig <string>` (which is ignored at runtime) with proper individual args:
+
+| Arg | Type | Env var | Default | Description |
+|---|---|---|---|---|
+| `-n/--count` (exists) | `u64` | — | `100` | Number of entries |
+| `--brokers` | `String` | `LOGGEN_KAFKA_BROKERS` | `"localhost:9092"` | Kafka bootstrap servers |
+| `--topic` (required) | `String` | `LOGGEN_KAFKA_TOPIC` | — | Kafka topic name |
+| `--key-var` | `Option<String>` | `LOGGEN_KAFKA_KEY_VAR` | — | Template var for message key |
+| `--acks` | `String` | `LOGGEN_KAFKA_ACKS` | `"1"` | Producer acks: `0`, `1`, `all` |
+| `--timeout-ms` | `u64` | `LOGGEN_KAFKA_TIMEOUT_MS` | `5000` | Message timeout (ms) |
+| `--batch-size` | `u64` | `LOGGEN_KAFKA_BATCH_SIZE` | `100` | Max messages per flush |
+
+**Backward compatibility:** `--kafkaconfig` is removed. It was never functional (the handler ignored the value).
+
+### 3.5 Kafka Subcommand — Handler Changes (`handle_kafka`)
+
+```rust
+fn handle_kafka(
+    count: Option<u64>,
+    brokers: String,
+    topic: String,
+    key_var: Option<String>,
+    acks: String,
+    timeout_ms: u64,
+    batch_size: u64,
+    cancel: Arc<AtomicBool>,
+)
+```
+
+- Construct `Config` with `OutputConfig { target: "kafka", kafka: Some(KafkaOutputConfig { ... }), .. }`.
+- Validate via `validate_kafka_config()` before creating the writer.
+
+### 3.6 Files Changed
+
+| File | Changes |
+|---|---|
+| `src/main.rs` | Add new CLI args with `env` in `Http`/`Kafka` subcommands; update `handle_http`/`handle_kafka` signatures and bodies; reuse `KEY=VALUE` parsing for `--header` |
+| `Plan.md` | This section (Phase 3) |
+
+`src/config.rs` and `src/cli.rs` require no changes — all fields already exist and `create_writer` already reads them from `OutputConfig`.
+
+### 3.7 Implementation Order
+
+1. Add new CLI args to `Http` and `Kafka` subcommand structs (with `env` attributes)
+2. Update `handle_http` to accept and use all new params
+3. Update `handle_kafka` to accept and use all new params (replace ignored `_kafkaconfig`)
+4. Verify `cargo build`, `cargo test`, `cargo clippy` pass
+5. Update documentation and `README.md`
+
+---
+
 ## Key Dependencies
 
 ### Core Rust Crates:
