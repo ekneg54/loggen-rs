@@ -1,0 +1,20 @@
+# loggen example: simulation with basic delay
+#
+# Adds realistic timing between log entries using a random delay range.
+#
+# Usage: cargo run -- generate --config=examples/simulation-basic.yaml
+#
+# Reference:
+#   simulation.delay:    Delay range "min-max" in milliseconds between entries
+#   simulation.rotation: How to cycle: "none", "round_robin", "random"
+
+output:
+  target: stdout
+
+count: 20
+log_level: INFO
+message: "Simulated log event"
+
+simulation:
+  delay: "500-2000"
+  rotation: none

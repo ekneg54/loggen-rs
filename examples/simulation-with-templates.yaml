@@ -1,0 +1,22 @@
+# loggen example: simulation with templates and rotation
+#
+# Combines template-based log generation with simulation delays
+# and rotation through log profiles.
+#
+# Usage: cargo run -- generate --config=examples/simulation-with-templates.yaml
+
+output:
+  target: stdout
+
+count: 50
+log_level: INFO
+
+logs:
+  - "{{ ipv4 }} - {{ status }} {{ url }}"
+  - "{{ user_agent }} | {{ email }} | {{ port }}"
+
+template_rotation: sequential
+
+simulation:
+  delay: "10-1000"
+  rotation: round_robin

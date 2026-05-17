@@ -131,6 +131,18 @@ fn default_kafka_batch() -> u64 {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct SimulationConfig {
+    #[serde(default)]
+    pub delay: Option<String>,
+    #[serde(default = "default_sim_rotation")]
+    pub rotation: String,
+}
+
+fn default_sim_rotation() -> String {
+    "none".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub output: OutputConfig,
@@ -164,6 +176,10 @@ pub struct Config {
     pub progress: Option<bool>,
     #[serde(default = "default_progress_interval_config")]
     pub progress_interval: u64,
+
+    // Phase 7: Simulation & Timing Control
+    #[serde(default)]
+    pub simulation: Option<SimulationConfig>,
 }
 
 fn default_progress_interval_config() -> u64 {
@@ -207,6 +223,7 @@ impl Default for Config {
             num_threads: None,
             progress: None,
             progress_interval: default_progress_interval_config(),
+            simulation: None,
         }
     }
 }
@@ -262,6 +279,48 @@ mod tests {
         assert!(config.output.kafka.is_none());
         assert!(config.output.append);
         assert!(config.output.rotate_bytes.is_none());
+        assert!(config.simulation.is_none());
+    }
+
+    #[test]
+    fn test_simulation_yaml_deser() {
+        let yaml = r#"
+count: 100
+simulation:
+  delay: "200-1000"
+  rotation: round_robin
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let sim = config.simulation.expect("simulation should be present");
+        assert_eq!(sim.delay.as_deref(), Some("200-1000"));
+        assert_eq!(sim.rotation, "round_robin");
+    }
+
+    #[test]
+    fn test_simulation_rotation_default() {
+        let yaml = r#"
+count: 5
+simulation:
+  delay: "100-500"
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let sim = config.simulation.unwrap();
+        assert_eq!(sim.delay.as_deref(), Some("100-500"));
+        assert_eq!(sim.rotation, "none");
+    }
+
+    #[test]
+    fn test_simulation_delay_parsing() {
+        let yaml = r#"
+count: 5
+simulation:
+  delay: "50-200"
+  rotation: random
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let sim = config.simulation.unwrap();
+        assert_eq!(sim.delay.as_deref(), Some("50-200"));
+        assert_eq!(sim.rotation, "random");
     }
 
     #[test]

@@ -16,6 +16,7 @@ rayon = "1"
 regex = "1"
 ureq = "2"
 serde_json = "1"
+ctrlc = "3.4"
 
 rdkafka = { version = "0.28", optional = true }
 

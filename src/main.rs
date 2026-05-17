@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use loggen::cli::{apply_cli_args, create_writer, load_base_config, validate_http_config, validate_kafka_config};
 use loggen::{Config, Generator, OutputConfig, ProgressReporter};
+use loggen::generator::parse_delay_range;
 
 #[derive(Parser)]
 #[command(name = "loggen", version, about, long_about = None)]
@@ -28,9 +31,11 @@ enum Commands {
   loggen generate --templates ./templates/ --count 10000 --output output.log
   loggen generate --templates ./templates/ --count 100000 --output large.log --progress --threads 8
   loggen generate --var app_name=myapp --var host=web01 --templates ./templates/ --count 500
-  loggen generate --validate --config examples/example.yaml
-  loggen generate --validate --config examples/template-example.yaml
-  loggen completions bash > /etc/bash_completion.d/loggen
+   loggen generate --validate --config examples/example.yaml
+   loggen generate --validate --config examples/template-example.yaml
+   loggen generate --count 20 --sim-delay 500-2000
+   loggen generate --config examples/simulation-basic.yaml
+   loggen completions bash > /etc/bash_completion.d/loggen
 
 CONFIG REFERENCE:
   See docs/configuration-reference.md for all config fields
@@ -77,6 +82,14 @@ CONFIG REFERENCE:
         /// Number of worker threads for parallel generation
         #[arg(long)]
         threads: Option<usize>,
+
+        /// Simulation delay in ms (single value or MIN-MAX range, e.g. "100" or "10-500")
+        #[arg(long, value_name = "MS")]
+        sim_delay: Option<String>,
+
+        /// Simulation rotation mode: none, round_robin, random
+        #[arg(long, value_name = "MODE")]
+        sim_rotation: Option<String>,
     },
 
     /// Send logs to an HTTP endpoint
@@ -163,6 +176,19 @@ fn validate_config(config: &Config) -> Result<(), String> {
         _ => {}
     }
 
+    // Phase 7: Simulation validation
+    if let Some(ref sim) = config.simulation {
+        if let Some(ref delay) = sim.delay {
+            if let Err(e) = parse_delay_range(delay) {
+                errors.push(e);
+            }
+        }
+        match sim.rotation.as_str() {
+            "none" | "round_robin" | "random" => {}
+            _ => errors.push(format!("invalid simulation rotation '{}': must be none, round_robin, or random", sim.rotation)),
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -202,6 +228,14 @@ fn run_validate(config: &Config) {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn setup_ctrlc(cancel: &Arc<AtomicBool>) {
+    let flag = cancel.clone();
+    let _ = ctrlc::set_handler(move || {
+        flag.store(true, Ordering::SeqCst);
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
 fn handle_generate(
     config_path: Option<&PathBuf>,
     output: Option<String>,
@@ -214,11 +248,14 @@ fn handle_generate(
     progress: bool,
     no_progress: bool,
     threads: Option<usize>,
+    sim_delay: Option<String>,
+    sim_rotation: Option<String>,
+    cancel: Arc<AtomicBool>,
 ) {
     let cli_vars = parse_var_args(var);
 
     let base = load_base_config(config_path);
-    let mut config = apply_cli_args(base, output, count, level, message, cli_vars, templates);
+    let mut config = apply_cli_args(base, output, count, level, message, cli_vars, templates, sim_delay, sim_rotation);
 
     // Apply CLI progress flags
     if progress {
@@ -238,13 +275,19 @@ fn handle_generate(
         }
     }
 
+    // Validate config before generation
+    if let Err(e) = validate_config(&config) {
+        eprintln!("Config validation error:\n{}", e);
+        std::process::exit(1);
+    }
+
     // Handle --validate
     if validate {
         run_validate(&config);
         return;
     }
 
-    let generator = Generator::new(config);
+    let generator = Generator::new_with_cancel(config, cancel);
     let mut writer = create_writer(generator.config())
         .unwrap_or_else(|e| {
             eprintln!("Error: failed to create output writer: {}", e);
@@ -268,7 +311,7 @@ fn handle_generate(
     progress_reporter.done();
 }
 
-fn handle_http(url: String, count: Option<u64>) {
+fn handle_http(url: String, count: Option<u64>, cancel: Arc<AtomicBool>) {
     let config = Config {
         output: OutputConfig {
             target: "http".to_string(),
@@ -284,7 +327,7 @@ fn handle_http(url: String, count: Option<u64>) {
         std::process::exit(1);
     }
 
-    let generator = Generator::new(config);
+    let generator = Generator::new_with_cancel(config, cancel);
     let mut writer = create_writer(generator.config())
         .unwrap_or_else(|e| {
             eprintln!("Error: failed to create HTTP writer: {}", e);
@@ -296,7 +339,7 @@ fn handle_http(url: String, count: Option<u64>) {
     }
 }
 
-fn handle_kafka(_kafkaconfig: String, count: Option<u64>) {
+fn handle_kafka(_kafkaconfig: String, count: Option<u64>, cancel: Arc<AtomicBool>) {
     let config = Config {
         output: OutputConfig {
             target: "kafka".to_string(),
@@ -306,7 +349,7 @@ fn handle_kafka(_kafkaconfig: String, count: Option<u64>) {
         ..Config::default()
     };
 
-    let generator = Generator::new(config);
+    let generator = Generator::new_with_cancel(config, cancel);
     let mut writer = create_writer(generator.config())
         .unwrap_or_else(|e| {
             eprintln!("Error: failed to create Kafka writer: {}", e);
@@ -345,6 +388,9 @@ fn main() {
 
     let cli = Cli::parse();
 
+    let cancel = Arc::new(AtomicBool::new(false));
+    setup_ctrlc(&cancel);
+
     match cli.command {
         Some(Commands::Generate {
             output,
@@ -357,9 +403,11 @@ fn main() {
             progress,
             no_progress,
             threads,
-        }) => handle_generate(cli.config.as_ref(), output, count, level, message, var, templates, validate, progress, no_progress, threads),
-        Some(Commands::Http { url, count }) => handle_http(url, count),
-        Some(Commands::Kafka { kafkaconfig, count }) => handle_kafka(kafkaconfig, count),
+            sim_delay,
+            sim_rotation,
+        }) => handle_generate(cli.config.as_ref(), output, count, level, message, var, templates, validate, progress, no_progress, threads, sim_delay, sim_rotation, cancel),
+        Some(Commands::Http { url, count }) => handle_http(url, count, cancel),
+        Some(Commands::Kafka { kafkaconfig, count }) => handle_kafka(kafkaconfig, count, cancel),
         Some(Commands::Completions { shell }) => handle_completions(shell),
         None => {
             println!("No command provided. Use --help for usage information.");

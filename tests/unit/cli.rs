@@ -31,6 +31,8 @@ fn test_apply_cli_args_overrides_all() {
         Some("test msg".into()),
         HashMap::new(),
         None,
+        None,
+        None,
     );
     assert_eq!(config.count, 99);
     assert_eq!(config.log_level, "ERROR");
@@ -49,7 +51,7 @@ fn test_apply_cli_args_preserves_output_when_not_given() {
         },
         ..Config::default()
     };
-    let config = apply_cli_args(base, None, Some(1), Some("INFO".into()), Some("msg".into()), HashMap::new(), None);
+    let config = apply_cli_args(base, None, Some(1), Some("INFO".into()), Some("msg".into()), HashMap::new(), None, None, None);
     assert_eq!(config.output.target, "file");
     assert_eq!(config.output.path.as_deref(), Some("/orig/path"));
 }
@@ -71,6 +73,8 @@ fn test_apply_cli_args_overrides_output_when_given() {
         Some("INFO".into()),
         Some("msg".into()),
         HashMap::new(),
+        None,
+        None,
         None,
     );
     assert_eq!(config.output.target, "file");

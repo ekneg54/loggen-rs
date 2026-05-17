@@ -1,0 +1,18 @@
+# loggen example: simulation with file output
+#
+# Writes simulated log entries to file with realistic timing.
+#
+# Usage: cargo run -- generate --config=examples/simulation-file-output.yaml
+
+output:
+  target: file
+  path: simulation-output.log
+  append: false
+
+count: 100
+log_level: DEBUG
+message: "Simulation test entry"
+
+simulation:
+  delay: "200-1000"
+  rotation: random

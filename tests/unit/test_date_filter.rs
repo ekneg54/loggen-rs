@@ -16,6 +16,7 @@ fn test_config() -> Config {
         num_threads: None,
         progress: None,
         progress_interval: 10000,
+        simulation: None,
     }
 }
 

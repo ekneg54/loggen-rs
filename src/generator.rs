@@ -1,8 +1,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::{LazyLock, mpsc};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, mpsc};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use rand::rngs::StdRng;
@@ -105,6 +106,28 @@ fn random_status(rng: &mut StdRng) -> u16 {
         *[400u16, 401, 403, 404, 405, 418, 429].choose(rng).unwrap()
     } else {
         *[500u16, 502, 503, 504].choose(rng).unwrap()
+    }
+}
+
+pub fn parse_delay_range(delay_str: &str) -> Result<(u64, u64), String> {
+    let parts: Vec<&str> = delay_str.split('-').collect();
+    match parts.len() {
+        1 => {
+            let val: u64 = parts[0].trim().parse()
+                .map_err(|_| format!("invalid delay value '{}'", parts[0]))?;
+            Ok((val, val))
+        }
+        2 => {
+            let min: u64 = parts[0].trim().parse()
+                .map_err(|_| format!("invalid delay min value '{}'", parts[0]))?;
+            let max: u64 = parts[1].trim().parse()
+                .map_err(|_| format!("invalid delay max value '{}'", parts[1]))?;
+            if min > max {
+                return Err(format!("invalid delay range '{}': min ({}) > max ({})", delay_str, min, max));
+            }
+            Ok((min, max))
+        }
+        _ => Err(format!("invalid delay format '{}': expected a single millisecond value or MIN-MAX range", delay_str)),
     }
 }
 
@@ -231,6 +254,7 @@ enum TemplateRotation {
     Sequential,
     Random,
     RoundRobin,
+    None,
 }
 
 impl TemplateRotation {
@@ -238,6 +262,7 @@ impl TemplateRotation {
         match s {
             "random" => TemplateRotation::Random,
             "round_robin" => TemplateRotation::RoundRobin,
+            "none" => TemplateRotation::None,
             _ => TemplateRotation::Sequential,
         }
     }
@@ -249,10 +274,16 @@ pub struct Generator {
     tera: Tera,
     seed: u64,
     rotation: TemplateRotation,
+    delay_range: Option<(u64, u64)>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl Generator {
     pub fn new(config: Config) -> Self {
+        Self::new_with_cancel(config, Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn new_with_cancel(config: Config, cancelled: Arc<AtomicBool>) -> Self {
         let seed = config.seed.unwrap_or_else(|| {
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -278,17 +309,42 @@ impl Generator {
                 (Vec::new(), Tera::default())
             }
         };
+        let delay_range = config.simulation.as_ref()
+            .and_then(|s| s.delay.as_ref())
+            .map(|d| parse_delay_range(d));
+        let delay_range = match delay_range {
+            Some(Ok(range)) => Some(range),
+            Some(Err(e)) => panic!("Simulation config error: {}", e),
+            None => None,
+        };
+
+        let rotation = match config.simulation.as_ref() {
+            Some(sim) if sim.rotation == "none" => TemplateRotation::None,
+            Some(sim) => TemplateRotation::from_str(&sim.rotation),
+            None => TemplateRotation::from_str(&config.template_rotation),
+        };
+
         Generator {
-            rotation: TemplateRotation::from_str(&config.template_rotation),
+            rotation,
             config,
             templates,
             tera,
             seed,
+            delay_range,
+            cancelled,
         }
     }
 
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    pub fn cancelled_arc(&self) -> Arc<AtomicBool> {
+        self.cancelled.clone()
     }
 
     pub fn generate(&self) -> Vec<LogEntry> {
@@ -318,7 +374,7 @@ impl Generator {
         let count = self.config.count;
         if self.templates.is_empty() {
             self.write_legacy_stream(count, writer, progress)?;
-        } else if self.config.random_intensity >= 1.0 {
+        } else if self.config.random_intensity >= 1.0 && self.config.simulation.is_none() {
             self.write_template_parallel_stream(count, writer, progress)?;
         } else {
             self.write_template_stream(count, writer, progress)?;
@@ -370,6 +426,7 @@ impl Generator {
             TemplateRotation::Random => {
                 rng.gen_range(0..self.templates.len())
             }
+            TemplateRotation::None => 0,
         };
 
         let template = &self.templates[template_index];
@@ -429,13 +486,24 @@ impl Generator {
 
     fn write_legacy_stream(&self, count: u64, writer: &mut dyn LogWriter, progress: &mut ProgressReporter) -> Result<(), Box<dyn std::error::Error>> {
         let ts = current_timestamp().to_string();
-        for i in 0..count {
+        let mut rng = StdRng::seed_from_u64(self.seed);
+        let infinite = self.config.simulation.is_some();
+        let mut i = 0u64;
+        while (infinite || i < count) && !self.cancelled.load(Ordering::Relaxed) {
             writer.write_entry(&LogEntry {
                 timestamp: ts.clone(),
                 level: self.config.log_level.clone(),
                 message: format!("{} #{}", self.config.message, i + 1),
             })?;
+            if self.delay_range.is_some() {
+                writer.flush()?;
+            }
             progress.report(i + 1);
+            if let Some((min, max)) = self.delay_range {
+                let sleep_ms = rng.gen_range(min..=max);
+                std::thread::sleep(Duration::from_millis(sleep_ms));
+            }
+            i += 1;
         }
         Ok(())
     }
@@ -448,11 +516,21 @@ impl Generator {
         let ts = current_timestamp();
         let mut rng = StdRng::seed_from_u64(self.seed);
         let mut current: HashMap<String, String> = HashMap::new();
+        let infinite = self.config.simulation.is_some();
+        let mut i = 0u64;
 
-        for i in 0..count {
+        while (infinite || i < count) && !self.cancelled.load(Ordering::Relaxed) {
             let entry = self.render_single_entry(i, &template_vars, &all_random_names, &mut rng, &mut current, ts);
             writer.write_entry(&entry)?;
+            if self.delay_range.is_some() {
+                writer.flush()?;
+            }
             progress.report(i + 1);
+            if let Some((min, max)) = self.delay_range {
+                let sleep_ms = rng.gen_range(min..=max);
+                std::thread::sleep(Duration::from_millis(sleep_ms));
+            }
+            i += 1;
         }
         Ok(())
     }
@@ -488,6 +566,7 @@ impl Generator {
                     let template_index = match rotation {
                         TemplateRotation::Sequential | TemplateRotation::RoundRobin => (i as usize) % templates.len(),
                         TemplateRotation::Random => rng.gen_range(0..templates.len()),
+                        TemplateRotation::None => 0,
                     };
                     let template = &templates[template_index];
                     let used_vars = extract_template_vars(template);
@@ -524,11 +603,19 @@ impl Generator {
         });
 
         let mut emitted: u64 = 0;
+        let mut rng = StdRng::seed_from_u64(self.seed);
         while let Ok(entries) = rx.recv() {
             for entry in &entries {
                 writer.write_entry(entry)?;
+                if self.delay_range.is_some() {
+                    writer.flush()?;
+                }
                 emitted += 1;
                 progress.report(emitted);
+                if let Some((min, max)) = self.delay_range {
+                    let sleep_ms = rng.gen_range(min..=max);
+                    std::thread::sleep(Duration::from_millis(sleep_ms));
+                }
             }
         }
 

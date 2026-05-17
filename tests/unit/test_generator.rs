@@ -19,6 +19,7 @@ fn test_config() -> Config {
         num_threads: None,
         progress: None,
         progress_interval: 10000,
+        simulation: None,
     }
 }
 
@@ -67,6 +68,121 @@ fn test_generate_entry_content_legacy() {
     assert_eq!(entries[0].level, "ERROR");
     assert_eq!(entries[0].message, "custom message #1");
     assert!(!entries[0].timestamp.is_empty());
+}
+
+// ── Simulation / Timing Control ──
+
+#[test]
+fn test_simulation_delay_stream() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_clone = cancel.clone();
+    let handle = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        cancel_clone.store(true, Ordering::SeqCst);
+    });
+
+    let config = Config {
+        count: 5,
+        simulation: Some(loggen::SimulationConfig {
+            delay: Some("0-1".to_string()),
+            rotation: "none".to_string(),
+        }),
+        ..test_config()
+    };
+    let gen = Generator::new_with_cancel(config, cancel);
+    let mut writer = StdoutWriter::new();
+    let mut progress = ProgressReporter::new(false, 5, 0.0, 1000);
+    let result = gen.generate_to_writer_with_progress(&mut writer, &mut progress);
+    handle.join().unwrap();
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_simulation_no_delay() {
+    let config = Config {
+        count: 3,
+        simulation: Some(loggen::SimulationConfig {
+            delay: None,
+            rotation: "round_robin".to_string(),
+        }),
+        ..test_config()
+    };
+    let gen = Generator::new(config);
+    let entries = gen.generate_with_count(3);
+    assert_eq!(entries.len(), 3);
+}
+
+#[test]
+fn test_simulation_delay_legacy_stream() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_clone = cancel.clone();
+    let handle = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        cancel_clone.store(true, Ordering::SeqCst);
+    });
+
+    let config = Config {
+        count: 3,
+        log_level: "INFO".to_string(),
+        message: "delay test".to_string(),
+        simulation: Some(loggen::SimulationConfig {
+            delay: Some("1-2".to_string()),
+            rotation: "none".to_string(),
+        }),
+        ..Config::default()
+    };
+    let gen = Generator::new_with_cancel(config, cancel);
+    let mut writer = StdoutWriter::new();
+    let mut progress = ProgressReporter::new(false, 3, 0.0, 1000);
+    let result = gen.generate_to_writer_with_progress(&mut writer, &mut progress);
+    handle.join().unwrap();
+    assert!(result.is_ok());
+}
+
+// ── parse_delay_range tests ──
+
+#[test]
+fn test_parse_delay_range_valid() {
+    let result = loggen::generator::parse_delay_range("100-500");
+    assert_eq!(result, Ok((100, 500)));
+}
+
+#[test]
+fn test_parse_delay_range_zero() {
+    let result = loggen::generator::parse_delay_range("0-0");
+    assert_eq!(result, Ok((0, 0)));
+}
+
+#[test]
+fn test_parse_delay_range_invalid_format() {
+    let result = loggen::generator::parse_delay_range("abc");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_parse_delay_range_single_value() {
+    let result = loggen::generator::parse_delay_range("100");
+    assert_eq!(result, Ok((100, 100)));
+}
+
+#[test]
+fn test_parse_delay_range_min_gt_max() {
+    let result = loggen::generator::parse_delay_range("200-100");
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("min") || err.contains("200") || err.contains("100"));
+}
+
+#[test]
+fn test_parse_delay_range_non_numeric() {
+    let result = loggen::generator::parse_delay_range("abc-def");
+    assert!(result.is_err());
 }
 
 #[test]

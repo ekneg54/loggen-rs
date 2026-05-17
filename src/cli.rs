@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::config::OutputConfig;
+use crate::config::{OutputConfig, SimulationConfig};
 use crate::output::{BufferedLogWriter, FileWriter, HttpWriter, StdoutWriter};
 use crate::{Config, LogWriter};
 
@@ -27,6 +27,8 @@ pub fn apply_cli_args(
     message: Option<String>,
     var: HashMap<String, String>,
     templates: Option<String>,
+    sim_delay: Option<String>,
+    sim_rotation: Option<String>,
 ) -> Config {
     if let Some(c) = count {
         config.count = c;
@@ -56,6 +58,20 @@ pub fn apply_cli_args(
 
     if templates.is_some() {
         config.templates = templates;
+    }
+
+    if sim_delay.is_some() || sim_rotation.is_some() {
+        let mut sim = config.simulation.unwrap_or(SimulationConfig {
+            delay: None,
+            rotation: "none".to_string(),
+        });
+        if let Some(d) = sim_delay {
+            sim.delay = Some(d);
+        }
+        if let Some(r) = sim_rotation {
+            sim.rotation = r;
+        }
+        config.simulation = Some(sim);
     }
 
     config
