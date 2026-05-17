@@ -15,8 +15,6 @@
 | `random_vars` | `Option<HashMap<String, Vec<String>>>` | `None` | Custom random pools — a var matching a pool name picks a random element each entry |
 | `random_intensity` | `f64` | `1.0` | Probability (0.0–1.0) of randomizing auto-vars per entry per variable. 0.0 = no randomization, 1.0 = always randomize |
 | `template_rotation` | `String` | `"sequential"` | Template selection strategy: `"sequential"`, `"random"`, or `"round_robin"` |
-| `attacks` | `Option<Vec<AttackConfig>>` | `None` | Attack pattern configurations |
-| `attack_only` | `bool` | `false` | If true, generate only attack entries (no normal logs) |
 | `num_threads` | `Option<usize>` | `None` | Rayon thread pool size. `None` = system default |
 | `progress` | `Option<bool>` | `None` | Enable/disable progress reporting. `None` = auto-enable for count >= 100,000 |
 | `progress_interval` | `u64` | `10000` | Entry count between progress updates (min 1000) |
@@ -51,39 +49,11 @@
 | `timeout_ms` | `u64` | `5000` | Message delivery timeout (ms) |
 | `batch_size` | `u64` | `100` | Max messages to buffer before flush |
 
-## `AttackConfig` Fields
+## `SimulationConfig` Fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `name` | `Option<String>` | `None` | Optional label for logging / debugging |
-| `type` | `String` | required | One of: `"single_event"`, `"multi_ordered"`, `"threshold_field"` |
-| `template` | `Option<String>` | `None` | Inline Tera template (`single_event` / `threshold_field`) |
-| `sequence` | `Option<Vec<String>>` | `None` | Ordered list of Tera templates (`multi_ordered`) |
-| `count` | `Option<u64>` | `None` | Per-attack entry count; falls back to top-level `count` |
-| `interleave` | `bool` | `false` | If true, mix attack entries with normal entries during generation |
-| `weight` | `f64` | `0.5` | Relative probability of picking this attack when interleaving (0.0–1.0) |
-| `repeat` | `String` | `"loop"` | For `multi_ordered`: `"once"` or `"loop"` |
-| `threshold` | `Option<ThresholdConfig>` | `None` | For `threshold_field`: controls proportion of entries in a value bucket |
-| `vars` | `Option<HashMap<String, AttackVarConfig>>` | `None` | Per-attack variable definitions (override global vars) |
-| `common` | `Option<Vec<String>>` | `None` | Variable names to freeze after first entry (persistent across attack run) |
+| `delay` | `Option<String>` | `None` | Delay between entries: single ms value (`"500"`) or range (`"100-500"`) |
+| `rotation` | `String` | `"none"` | Template selection when simulation is active: `"none"`, `"round_robin"`, or `"random"` |
 
-## `ThresholdConfig` Fields
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `field` | `String` | required | Template variable name to threshold on |
-| `min` | `Option<u64>` | `None` | Inclusive lower bound for the threshold bucket |
-| `max` | `Option<u64>` | `None` | Inclusive upper bound for the threshold bucket |
-| `proportion` | `f64` | `0.5` | Target proportion of entries in the threshold bucket (0.0–1.0) |
-
-At least one of `min`/`max` must be set:
-- `min` only: bucket = value >= min
-- `max` only: bucket = value <= max
-- Both: bucket = min <= value <= max
-
-## `AttackVarConfig` Fields
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `values` | `Vec<String>` | required | Pool of values to draw from |
-| `mode` | `String` | `"random"` | Selection mode: `"random"` (uniform), `"cycle"` (sequential wrap-around), `"weighted"` (first values higher probability) |
+When `simulation` is configured, generation runs infinitely (stop with Ctrl+C). The `delay` adds a random sleep between each log entry output. The `rotation` controls how templates are cycled (`"none"` = always use first template, `"round_robin"` = cycle in order, `"random"` = pick randomly).

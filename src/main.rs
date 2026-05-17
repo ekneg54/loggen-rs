@@ -40,7 +40,7 @@ enum Commands {
 CONFIG REFERENCE:
   See docs/configuration-reference.md for all config fields
   See docs/template-guide.md for template syntax and variables
-  See docs/attack-gallery.md for attack pattern types
+
   See docs/cli-cheatsheet.md for all CLI flags with examples")]
     Generate {
         /// Output file path (default: stdout)

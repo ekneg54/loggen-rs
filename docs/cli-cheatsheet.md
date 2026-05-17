@@ -27,32 +27,20 @@ loggen generate --output output.log  # Write to file
 | `--templates PATH` | Template file or directory with `.logtpl` files |
 | `--var KEY=VALUE` | Custom template variables (repeatable) |
 
-## Attack Options
+## Simulation Options
 
 | Flag | Description |
 |------|-------------|
-| `--attack SPEC` | Define inline attack: `name=type:template[:count]` (repeatable) |
-| `--attack-config FILE` | Load attacks from YAML file |
-| `--attack-only` | Generate only attack entries (no normal logs) |
+| `--sim-delay MS` | Delay between entries: single ms (`500`) or range (`10-500`). Enables infinite streaming |
+| `--sim-rotation MODE` | Template cycling mode: `none`, `round_robin`, `random` (default: `none`) |
 
-### Attack Spec Format
-
-```
-name=single:template text :count
-name=multi:template text :count
-name=threshold:template text :count
-```
-
-For multi attacks, repeat `--attack` with the same name to build the sequence:
-```
---attack scan=multi:"CONNECT port 22" --attack scan=multi:"CONNECT port 80"
-```
+When `--sim-delay` or `--sim-rotation` is set, generation runs endlessly until Ctrl+C.
 
 ## Validation
 
 | Flag | Description |
 |------|-------------|
-| `--validate` | Load config, validate templates and attacks, then exit (no generation) |
+| `--validate` | Load config, validate templates, then exit (no generation) |
 
 ## Performance
 
@@ -82,14 +70,17 @@ loggen generate --templates ./templates/ --count 1000 --output logs.txt
 # Template mode with custom variable
 loggen generate --templates ./templates/ --var app_name=myapp --count 500
 
-# Attack pattern from CLI
-loggen generate --attack "brute=single:{{ ipv4 }} - POST /login {{ status }} :50"
+# Infinite streaming with 200ms delay between entries (Ctrl+C to stop)
+loggen generate --templates ./templates/ --sim-delay 200
 
-# Attack from config file
-loggen generate --config examples/attack-brute-force.yaml
+# Streaming with random delay 50-500ms and round-robin template rotation
+loggen generate --templates ./templates/ --sim-delay 50-500 --sim-rotation round_robin
 
 # Validate config without generating
 loggen generate --validate --config examples/template-example.yaml
+
+# Simulation from YAML config (infinite, 100ms delay, random templates)
+loggen generate --config examples/simulation-with-templates.yaml
 
 # HTTP output
 loggen generate --config examples/http-output.yaml
