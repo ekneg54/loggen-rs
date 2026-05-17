@@ -1,69 +1,57 @@
 # loggen-rs
 
-Early-stage Rust log generator. Binary + library crate. Phase 1 (§1.1–1.2: foundation, template system + randomization) of `Plan.md` is implemented. §1.3 features (HttpWriter, KafkaWriter, buffering, progress, completions) and Phase 2 are stubs.
+Early-stage Rust log generator. Binary + library crate. Phase 1 (§1.1–1.2) of `Plan.md` is implemented; §1.3+ and Phase 2 are stubs.
 
 ## Commands
 
 ```sh
-cargo build                          # build
-cargo test                           # all tests (unit + integration)
-cargo test --lib                     # inline #[cfg(test)] tests only
-cargo test --test mod                # integration tests only (test binary is "mod")
-loggen generate [--count N]    # run binary
+cargo build                           # std build
+cargo build --features kafka          # Kafka support (needs librdkafka / system lib)
+cargo test                            # all tests
+cargo test --lib                      # inline #[cfg(test)] tests only
+cargo test --test mod                 # integration tests only (test binary name is "mod")
+cargo bench                           # criterion benchmarks (harness=false)
+cargo clippy --all-targets -- -D warnings   # CI-recommended lint check
+cargo audit                           # CI security audit
+loggen generate [--count N]           # run binary
 ```
 
-## Structure
+## Key modules
 
-- `src/lib.rs` — Public API boundary; re-exports all public items from submodules.
-- `src/main.rs` — CLI entrypoint. `clap::Parser` + `Subcommand` derive, `prog <subcommand> help` workaround at `main.rs:75-83`.
-- `src/cli.rs` — CLI glue: `load_base_config`, `apply_cli_args`, `create_writer`, `write_entries`.
-- `src/generator.rs` — `Generator` with Tera template mode and legacy fallback.
-- `src/config.rs` — `Config`, `OutputConfig`, `LogEntry`, YAML deser.
-- `src/output.rs` — `LogWriter` trait, `StdoutWriter`, `FileWriter` (append mode).
-- `tests/unit/` — Integration tests wired via `tests/mod.rs` → `tests/unit/mod.rs`.
-- `examples/` — YAML config fixtures.
-- `templates/` — 3 `.logtpl` files (apache, nginx, syslog).
+- `src/lib.rs` — re-exports all public items
+- `src/main.rs` — `clap::Parser` + `Subcommand` derive; `prog <subcommand> help` workaround at `main.rs:135-143`
+- `src/cli.rs` — `load_base_config`, `apply_cli_args`, `create_writer`, `write_entries`
+- `src/generator.rs` — `Generator` with Tera template mode and legacy fallback; `generate()` returns `Vec<LogEntry>`, CLI uses streaming `generate_to_writer()`
+- `src/config.rs` — `Config`, `OutputConfig`, `LogEntry`, YAML deser via `serde_yaml`
+- `src/output.rs` — `LogWriter` trait, `StdoutWriter`, `FileWriter` (append by default, configurable truncate + `rotate_bytes`), `BufferedLogWriter`, `HttpWriter` (full impl with batching/retry), `KafkaWriter` (feature-gated via `--features kafka`), `ProgressReporter`
 
 ## Quirks
 
-- `prog <subcommand> help` works via `try_show_completion_help` workaround.
-- `--output` flag sets `target: "file"` automatically (`cli.rs:150-155`).
-- `FileWriter` uses **append** mode (never truncates).
-- `Cargo.lock` is committed despite being in `.gitignore` — do not remove the `.gitignore` entry.
-- `Http` and `Kafka` subcommands are stubs (just `println!`).
-- Template validation **panics** at `Generator::new()` on unknown variables.
-- Output format depends on `template_mode`: bare message vs `[timestamp] [level] message`.
-- Built-in template vars: `timestamp`, `level`, `index`, `message`. Auto-random vars: `ip`/`ipv4`, `ipv6`, `user_agent`, `email`, `url`, `port`, `status`, `user`.
-- `Generator::generate()` returns `Vec<LogEntry>` (for tests). CLI uses `generate_to_writer()` which streams entries without buffering all in memory.
-- Streaming pipeline has 3 normal paths: `write_legacy_stream` (sequential), `write_template_stream` (sequential, stateful random), `write_template_parallel_stream` (rayon parallel batches via `mpsc` channel, only when `random_intensity >= 1.0`).
-- Dependencies: `clap` (derive), `serde`/`serde_yaml`, `tera`, `rand`, `rayon`, `regex`, `chrono`.
+- `--output` flag sets `target: "file"` automatically (`cli.rs:43-49`)
+- `FileWriter` default is **append** mode (never truncates unless `output.append: false`)
+- Template validation **panics** at `Generator::new()` on unknown variables
+- Streaming has 3 paths: `write_legacy_stream` (sequential), `write_template_stream` (sequential), `write_template_parallel_stream` (rayon via `mpsc`, only when `random_intensity >= 1.0` and no simulation)
+- Simulation mode (`sim_delay`, `sim_rotation`) makes streaming infinite (until Ctrl+C via `ctrlc`)
+- `ProgressReporter` auto-enables when count >= 100,000 and target != stdout
+- Default `config.count` is **1** (not user-friendly but deliberate)
+- `config.seed` enables reproducible output; no seed = random
+- `Config::has_templates()` is the canonical template-mode check
+- `Cargo.lock` is committed despite being in `.gitignore` — keep both
+- Container image via `nix build .#container` (Nix flake)
+- Release workflow cross-compiles 4 targets + container via Nix (`ghcr.io`)
 
-## Testing quirks
+## Testing
 
-- Tests exist inline (`#[cfg(test)]` in `src/config.rs`, `src/generator.rs`, `src/output.rs`) and as integration tests in `tests/unit/`.
-- Tests write files to CWD (no `tempfile` crate): `test_config*.yaml`, `test_output.log`, `test_new_file.log`, `test_template_mode.log`, `test_cli_gen.log`, `output.log`.
-- Integration tests in `tests/unit/test_config.rs` read from `examples/` — must run from repo root.
+- Inline tests (`#[cfg(test)]`) in `config.rs`, `generator.rs`, `output.rs`
+- Integration tests in `tests/unit/` (wired via `tests/mod.rs`)
+- **Tests write files to CWD** (no `tempfile` crate): `test_config*.yaml`, `test_output*.log`, `test_new_file.log`, `test_template_mode.log`, `test_cli_gen.log`, `output.log`
+- Integration tests at `tests/unit/test_config.rs` read from `examples/` — must run from repo root
+- Benchmarks: `benches/benchmarks.rs` via criterion
 
-## CI (`.github/workflows/rust.yml`)
+## Dependencies
 
-`cargo build --verbose` then `cargo test --verbose` on push/PR to `main`.
+`clap` (derive), `clap_complete`, `serde`/`serde_yaml`, `tera`, `rand`, `rayon`, `regex`, `chrono`, `ureq` (HTTP), `serde_json`, `ctrlc`. Optional: `rdkafka` behind `kafka` feature.
 
-## Security (`.github/workflows/security.yml`)
+## Security history
 
-3-job pipeline on push/PR to `main` + weekly Monday 06:00:
-- **audit** — `cargo audit` (dependency advisory check via `taiki-e/install-action`).
-- **clippy** — `cargo clippy --all-targets -- -D warnings` (deny all lints).
-- **build-and-test** — `cargo build --verbose` + `cargo test --verbose`.
-
-## Security audit findings (variable visibility)
-
-All findings below were remediated in a single pass. Fields marked `pub(crate)` are visible within the crate but hidden from external consumers.
-
-| File | Item | Original | Fixed | Risk |
-|------|------|----------|-------|------|
-| `src/output.rs:16` | `StdoutWriter::template_mode` | `pub` | `pub(crate)` | **Medium** — output format control |
-| `src/output.rs:51` | `FileWriter::template_mode` | `pub` | `pub(crate)` | **Medium** — output format control |
-| `src/output.rs:123-126` | `BufferedLogWriter` (4 fields) | all `pub` | all `pub(crate)` | **Medium** — buffer bypass |
-
-### API changes
-- Added `StdoutWriter::set_template_mode(&mut self, mode: bool)` and `FileWriter::set_template_mode(...)` for external consumers (integration tests, benchmarks).
+`StdoutWriter::template_mode`, `FileWriter::template_mode`, and all `BufferedLogWriter` fields are `pub(crate)` (were `pub` in earlier versions). Public setter methods (`set_template_mode`) were added for external consumers.
