@@ -1,15 +1,41 @@
 # loggen-rs
 
 A high-performance log generator written in Rust. Generates realistic log entries
-using Tera (Jinja2) templates, built-in random variables, and configurable attack
-patterns — streamed to stdout, file, HTTP, or Kafka.
+using Tera (Jinja2) templates and built-in random variables — streamed to stdout,
+file, HTTP, or Kafka.
+
+## Installation
+
+### Pre-built binaries
+
+Download the latest release tarball for your platform from the
+[releases page](https://github.com/ekneg54/loggen-rs/releases) and extract the
+`loggen` binary.
+
+### Container image
+
+A container image is available via GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/ekneg54/loggen-rs:latest
+```
+
+### Build from source
+
+```bash
+cargo install --git https://github.com/ekneg54/loggen-rs
+```
+
+Or clone and build manually (see [Building](#building)).
 
 ## Quick Start
 
 ```bash
-loggen generate --count 100                                              # 100 basic entries
-loggen generate --templates ./templates/ --count 1000 --output out.log       # Template mode
+loggen generate --count 100                                                   # 100 basic entries
+loggen generate --templates ./templates/ --count 1000 --output out.log        # Template mode
 loggen generate --config examples/template-example.yaml                       # From YAML
+loggen http --url http://localhost:8080/logs --count 1000                     # HTTP output
+loggen kafka --topic logs --count 500                                         # Kafka output
 ```
 
 ## Built-in Variables
@@ -37,7 +63,6 @@ All features are configured via YAML or CLI flags. See full reference:
 
 - [Configuration Reference](docs/configuration-reference.md)
 - [Template & Variable Guide](docs/template-guide.md)
-- [Attack Scenario Gallery](docs/attack-gallery.md)
 - [CLI Cheat Sheet](docs/cli-cheatsheet.md)
 
 ### Minimal config
@@ -61,29 +86,10 @@ random_intensity: 1.0
 template_rotation: round_robin
 ```
 
-### Attack pattern
-
-```yaml
-attacks:
-  - name: brute-force
-    type: single_event
-    template: '{{ ipv4 }} - POST /login {{ status }}'
-    count: 50
-    interleave: true
-    vars:
-      status:
-        values: ["401", "401", "401", "401", "200"]
-        mode: weighted
-      ipv4:
-        values: ["192.168.1.100"]
-        mode: cycle
-```
-
 ## Key Features
 
 - **Template Engine:** Tera (Jinja2-inspired) with `{{ var }}`, filters, `{% if %}`, `{% for %}`
 - **Auto-Randomization:** Built-in generators for realistic IPs, UAs, emails, URLs, ports, status codes
-- **Attack Patterns:** `single_event`, `multi_ordered`, `threshold_field` with interleaving
 - **Streaming Output:** Memory-efficient pipeline — no buffering all entries in memory
 - **Parallel Generation:** Rayon-based parallel batch processing for high throughput
 - **Multiple Targets:** stdout, file (with rotation), HTTP (with batching/retry), Kafka
@@ -104,11 +110,7 @@ Browse `examples/` for ready-to-run YAML files:
 | `template-example.yaml` | Template mode with built-in random vars |
 | `http-output.yaml` | HTTP output with NDJSON batching |
 | `kafka-output.yaml` | Kafka output (requires `--features kafka`) |
-| `attack-brute-force.yaml` | Brute force login (single_event) |
-| `attack-port-scan.yaml` | Port scan (multi_ordered) |
-| `attack-ddos.yaml` | DDoS ramp-up (threshold_field) |
-| `attack-sqli-probe.yaml` | SQL injection probe (multi_ordered) |
-| `attack-credential-stuffing.yaml` | Credential stuffing (single_event + common) |
+
 
 ## Default Templates
 
@@ -125,7 +127,6 @@ loggen generate --templates ./templates/ --count 100
 # Generate
 loggen generate [-n COUNT] [-l LEVEL] [-m MESSAGE] [-o FILE]
                [--templates PATH] [--var KEY=VALUE]
-               [--attack SPEC] [--attack-config FILE] [--attack-only]
                [--validate] [--progress] [--no-progress] [--threads N]
 
 # HTTP output
@@ -150,5 +151,4 @@ cargo test                     # Run all tests
 
 - `docs/configuration-reference.md` — All config fields with types, defaults, and constraints
 - `docs/template-guide.md` — Tera template syntax, built-in vars, filters, randomization
-- `docs/attack-gallery.md` — Attack pattern types, var modes, common fields, interleaving
-- `docs/cli-cheatsheet.md` — CLI flags, attack spec format, common examples
+- `docs/cli-cheatsheet.md` — CLI flags, common examples
