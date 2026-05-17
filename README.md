@@ -31,11 +31,11 @@ Or clone and build manually (see [Building](#building)).
 ## Quick Start
 
 ```bash
-loggen generate --count 100                                                   # 100 basic entries
-loggen generate --templates ./templates/ --count 1000 --output out.log        # Template mode
-loggen generate --config examples/template-example.yaml                       # From YAML
-loggen http --url http://localhost:8080/logs --count 1000                     # HTTP output
-loggen kafka --topic logs --count 500                                         # Kafka output
+docker run ghcr.io/ekneg54/loggen-rs:latest generate --count 100                                              # 100 basic entries
+docker run ghcr.io/ekneg54/loggen-rs:latest generate --templates ./templates/ --count 1000 --output out.log   # Template mode
+docker run ghcr.io/ekneg54/loggen-rs:latest generate --config examples/template-example.yaml                  # From YAML
+docker run ghcr.io/ekneg54/loggen-rs:latest http --url http://localhost:8080/logs --count 1000                # HTTP output
+docker run ghcr.io/ekneg54/loggen-rs:latest kafka --topic logs --count 500                                    # Kafka output
 ```
 
 ## Built-in Variables
