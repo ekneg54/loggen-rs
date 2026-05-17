@@ -746,6 +746,192 @@ cargo clippy --all-targets -- -D warnings
 
 No new dependencies required. This is purely a deletion/refactor phase.
 
+## Phase 7: Simulation & Timing Control
+
+### 7.1 SimulationConfig (`src/config.rs`)
+
+New config block:
+
+```rust
+#[derive(Debug, Clone, Deserialize)]
+pub struct SimulationConfig {
+    #[serde(default)]
+    pub delay: Option<String>,       // "min-max" ms, e.g. "100-500"
+    #[serde(default = "default_sim_rotation")]
+    pub rotation: String,            // "none", "round_robin", "random"
+}
+```
+
+Added to `Config`:
+```rust
+#[serde(default)]
+pub simulation: Option<SimulationConfig>,
+```
+
+**Example YAML:**
+```yaml
+simulation:
+  delay: "200-1000"
+  rotation: round_robin
+count: 10000
+templates: ./templates/
+```
+
+### 7.2 Delay Implementation
+
+- Parse `delay` string `"min-max"` → `(u64, u64)` in milliseconds.
+- In all three streaming paths in `generator.rs` (`write_legacy_stream`, `write_template_stream`, `write_template_parallel_stream`), after each entry write, sleep for a random duration in `[min, max]`:
+
+```rust
+if let Some((min, max)) = &delay_range {
+    let sleep_ms = rng.gen_range(min..=max);
+    std::thread::sleep(Duration::from_millis(sleep_ms));
+}
+```
+
+- For the parallel path, delay is applied on the receiver side (after receiving each batch from the channel), so wall-clock timing is realistic.
+
+### 7.3 Rotation Mode (new concept, separate from template_rotation)
+
+Controls how the simulation cycles through multiple log sources. When multiple template sets or log profiles are defined under the simulation, the rotation mode determines the order:
+
+- `"none"`: No cycling — use the primary/default source.
+- `"round_robin"`: Cycle through sources in order, one entry per source per cycle.
+- `"random"`: Pick a random source for each entry.
+
+The rotation state is tracked per-stream and resets each generation run.
+
+### 7.4 CLI Additions (`src/main.rs`)
+
+```rust
+/// Simulation delay range (e.g. "100-500" ms)
+#[arg(long, value_name = "MIN-MAX")]
+sim_delay: Option<String>,
+
+/// Simulation rotation mode
+#[arg(long, value_name = "MODE")]
+sim_rotation: Option<String>,
+```
+
+Passed through `apply_cli_args` → `config.simulation`.
+
+### 7.5 Config Validation
+
+- `delay` parses as `u64-u64` and `min <= max`.
+- `rotation` is one of `"none"`, `"round_robin"`, `"random"`.
+
+### 7.6 Examples (`examples/`)
+
+Three new example files following the existing naming convention:
+
+**`examples/simulation-basic.yaml`** — delay with legacy mode:
+```yaml
+# loggen example: simulation with basic delay
+#
+# Adds realistic timing between log entries using a random delay range.
+#
+# Usage: cargo run -- generate --config=examples/simulation-basic.yaml
+#
+# Reference:
+#   simulation.delay:    Delay range "min-max" in milliseconds between entries
+#   simulation.rotation: How to cycle: "none", "round_robin", "random"
+
+output:
+  target: stdout
+
+count: 20
+log_level: INFO
+message: "Simulated log event"
+
+simulation:
+  delay: "500-2000"
+  rotation: none
+```
+
+**`examples/simulation-with-templates.yaml`** — delay + rotation with templates:
+```yaml
+# loggen example: simulation with templates and rotation
+#
+# Combines template-based log generation with simulation delays
+# and rotation through log profiles.
+#
+# Usage: cargo run -- generate --config=examples/simulation-with-templates.yaml
+
+output:
+  target: stdout
+
+count: 50
+log_level: INFO
+
+logs:
+  - "{{ ipv4 }} - {{ status }} {{ url }}"
+  - "{{ user_agent }} | {{ email }} | {{ port }}"
+
+template_rotation: sequential
+
+simulation:
+  delay: "100-800"
+  rotation: round_robin
+```
+
+**`examples/simulation-file-output.yaml`** — simulation with file output:
+```yaml
+# loggen example: simulation with file output
+#
+# Writes simulated log entries to file with realistic timing.
+#
+# Usage: cargo run -- generate --config=examples/simulation-file-output.yaml
+
+output:
+  target: file
+  path: simulation-output.log
+  append: false
+
+count: 100
+log_level: DEBUG
+message: "Simulation test entry"
+
+simulation:
+  delay: "200-1000"
+  rotation: random
+```
+
+Also update `main.rs` help text to add one simulation example to the `Generate` subcommand's `after_help`.
+
+### 7.7 Tests
+
+| Test | Scenario | Validation |
+|------|----------|------------|
+| `test_simulation_delay_parsing` | `"100-500"` → `(100, 500)` | Correct parsed range |
+| `test_simulation_delay_invalid` | `"abc"`, `"100"`, `"200-100"` | Error on bad format |
+| `test_simulation_rotation_default` | No simulation config | `rotation` defaults to `"none"` |
+| `test_simulation_rotation_values` | `"round_robin"`, `"random"`, `"none"` | All accepted |
+| `test_simulation_rotation_invalid` | `"foo"` | Error |
+| `test_simulation_delay_stream` | 5 entries with delay `"0-1"` | All 5 written, total wall-time ≥ 0ms |
+| `test_simulation_yaml_deser` | Full YAML with simulation block | Deserializes correctly |
+| `test_simulation_cli_override` | CLI `--sim-delay` overrides config | Delay config updated |
+
+### 7.8 Required Updates to Existing Code
+
+| File | Changes |
+|------|---------|
+| `src/config.rs` | New `SimulationConfig` struct, new `Config.simulation` field, new default function `default_sim_rotation` |
+| `src/generator.rs` | Parse delay range from config; apply sleep in all 3 streaming methods |
+| `src/cli.rs` | `apply_cli_args` accepts `sim_delay` and `sim_rotation` params; propagate to `config.simulation` |
+| `src/main.rs` | Add `--sim-delay`, `--sim-rotation` CLI flags; pass to `apply_cli_args`; add validation in `validate_config` |
+| `examples/` | 3 new YAML files |
+
+### 7.9 Implementation Order
+
+1. `SimulationConfig` struct + config deser + defaults
+2. Config validation (delay format, rotation values)
+3. CLI flags (`--sim-delay`, `--sim-rotation`)
+4. `apply_cli_args` wiring
+5. Delay logic in streaming paths
+6. Rotation mode logic
+7. Example files (3 YAMLs + CLI help update)
+8. Tests (unit + integration)
+
 ---
 
 ## Key Dependencies to Consider
