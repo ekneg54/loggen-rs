@@ -55,6 +55,36 @@ Format specifiers follow the chrono `strftime` conventions:
 `%Y` (year), `%m` (month), `%d` (day), `%H` (hour), `%M` (minute),
 `%S` (second), `%b` (abbreviated month), `%z` (timezone offset).
 
+The `date` filter expects a RFC 3339 timestamp (as produced by
+`{{ timestamp }}`); unix timestamps are accepted as well.
+
+### Additional Filters
+
+Besides the filters that ship with Tera itself (`upper`, `lower`, `trim`,
+`replace`, `capitalize`, `title`, `truncate`, `length`, `default`, `int`,
+`float`, …), loggen registers the following filters that Tera 1 provided out
+of the box:
+
+| Filter | Example | Description |
+|--------|---------|-------------|
+| `date` | `{{ timestamp \| date(format="%Y-%m-%d") }}` | Formats a timestamp (chrono `strftime`) |
+| `addslashes` | `{{ value \| addslashes }}` | Escapes `'`, `"`, `\` and NUL |
+| `json_encode` | `{{ value \| json_encode }}` | Encodes a value as JSON |
+| `urlencode` | `{{ value \| urlencode }}` | Percent-encodes reserved URI characters |
+| `slugify` | `{{ title \| slugify }}` | Turns a title into a URL slug |
+| `striptags` | `{{ html \| striptags }}` | Removes HTML tags |
+| `spaceless` | `{{ html \| spaceless }}` | Removes whitespace between tags |
+| `filesizeformat` | `{{ bytes \| filesizeformat }}` | Formats a byte count as human-readable size |
+
+The function `now()` returns the current time as a RFC 3339 timestamp, and
+`get_random(start=..., end=...)` returns a random number.
+
+> **Note (Tera 2):** Tera 2 is stricter than Tera 1. Accessing a field that does
+> not exist (e.g. `{{ user.name }}` where `user` is a string) is a render error
+> and the entry is emitted as `<render error>` instead of rendering an empty
+> value. Keep template variables flat (e.g. `{{ user }}` instead of
+> `{{ user.name }}`).
+
 ## Randomization Intensity
 
 The `random_intensity` field (0.0–1.0) controls how often auto-random variables

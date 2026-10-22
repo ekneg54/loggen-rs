@@ -6,14 +6,14 @@ use std::sync::{Arc, LazyLock, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
-use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
+use rand::prelude::{RngExt, SeedableRng, StdRng};
+use rand::seq::IndexedRandom;
 use rayon::prelude::*;
 use regex::Regex;
 use tera::{Context, Tera};
 
 use crate::config::{Config, LogEntry};
+use crate::filters::register_tera_extensions;
 use crate::output::{LogWriter, ProgressReporter};
 
 const BUILTIN_VARS: &[&str] = &["timestamp", "level", "index", "message"];
@@ -37,19 +37,19 @@ fn ts_to_rfc3339(ts: u64) -> String {
 }
 
 fn random_ipv4(rng: &mut StdRng) -> String {
-    format!("{}.{}.{}.{}", rng.gen_range(1..255), rng.gen_range(0..256), rng.gen_range(0..256), rng.gen_range(1..255))
+    format!("{}.{}.{}.{}", rng.random_range(1..255), rng.random_range(0..256), rng.random_range(0..256), rng.random_range(1..255))
 }
 
 fn random_ipv6(rng: &mut StdRng) -> String {
     format!("{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
-        rng.gen_range(0x0..0x10000),
-        rng.gen_range(0x0..0x10000),
-        rng.gen_range(0x0..0x10000),
-        rng.gen_range(0x0..0x10000),
-        rng.gen_range(0x0..0x10000),
-        rng.gen_range(0x0..0x10000),
-        rng.gen_range(0x0..0x10000),
-        rng.gen_range(0x0..0x10000),
+        rng.random_range(0x0..0x10000),
+        rng.random_range(0x0..0x10000),
+        rng.random_range(0x0..0x10000),
+        rng.random_range(0x0..0x10000),
+        rng.random_range(0x0..0x10000),
+        rng.random_range(0x0..0x10000),
+        rng.random_range(0x0..0x10000),
+        rng.random_range(0x0..0x10000),
     )
 }
 
@@ -89,15 +89,15 @@ fn random_url(rng: &mut StdRng) -> String {
 
 fn random_port(rng: &mut StdRng) -> u16 {
     let common = [80u16, 443, 8080, 8443, 3000, 5000, 9000, 5432, 6379, 22];
-    if rng.gen_bool(0.7) {
+    if rng.random_bool(0.7) {
         *common.choose(rng).unwrap()
     } else {
-        rng.gen_range(1024..65535)
+        rng.random_range(1024..65535)
     }
 }
 
 fn random_status(rng: &mut StdRng) -> u16 {
-    let roll: f64 = rng.gen();
+    let roll: f64 = rng.random();
     if roll < 0.65 {
         *[200u16, 201, 204, 206].choose(rng).unwrap()
     } else if roll < 0.80 {
@@ -298,6 +298,7 @@ impl Generator {
                     panic!("Template validation error: {}", e);
                 }
                 let mut tera = Tera::default();
+                register_tera_extensions(&mut tera);
                 for (i, tpl) in tpls.iter().enumerate() {
                     tera.add_raw_template(&format!("tpl_{}", i), tpl)
                         .expect("failed to add template to Tera");
@@ -424,7 +425,7 @@ impl Generator {
                 (i as usize) % self.templates.len()
             }
             TemplateRotation::Random => {
-                rng.gen_range(0..self.templates.len())
+                rng.random_range(0..self.templates.len())
             }
             TemplateRotation::None => 0,
         };
@@ -432,15 +433,14 @@ impl Generator {
         let template = &self.templates[template_index];
         let used_vars = extract_template_vars(template);
 
-        let mut ctx_values: HashMap<String, tera::Value> = HashMap::new();
-
-        ctx_values.insert("timestamp".to_string(), tera::Value::String(ts_to_rfc3339(ts)));
-        ctx_values.insert("level".to_string(), tera::Value::String(self.config.log_level.clone()));
-        ctx_values.insert("index".to_string(), tera::Value::Number(tera::Number::from(i + 1)));
-        ctx_values.insert("message".to_string(), tera::Value::String(self.config.message.clone()));
+        let mut context = Context::new();
+        context.insert("timestamp", &ts_to_rfc3339(ts));
+        context.insert("level", &self.config.log_level);
+        context.insert("index", &(i + 1));
+        context.insert("message", &self.config.message);
 
         for (k, v) in template_vars {
-            ctx_values.insert(k.clone(), tera::Value::String(v.clone()));
+            context.insert(k.clone(), v);
         }
 
         for var_name in &used_vars {
@@ -455,7 +455,7 @@ impl Generator {
             }
 
             let should_randomize = self.config.random_intensity >= 1.0
-                || (self.config.random_intensity > 0.0 && rng.gen_bool(self.config.random_intensity));
+                || (self.config.random_intensity > 0.0 && rng.random_bool(self.config.random_intensity));
 
             if should_randomize || !current.contains_key(var_name) {
                 let val = generate_random_value(var_name, &self.config, rng);
@@ -463,11 +463,9 @@ impl Generator {
             }
 
             if let Some(val) = current.get(var_name) {
-                ctx_values.insert(var_name.clone(), tera::Value::String(val.clone()));
+                context.insert(var_name.clone(), val);
             }
         }
-
-        let context = Context::from_serialize(&ctx_values).expect("failed to create Tera context");
 
         let rendered = match self.tera.render(&format!("tpl_{}", template_index), &context) {
             Ok(s) => s,
@@ -500,7 +498,7 @@ impl Generator {
             }
             progress.report(i + 1);
             if let Some((min, max)) = self.delay_range {
-                let sleep_ms = rng.gen_range(min..=max);
+                let sleep_ms = rng.random_range(min..=max);
                 std::thread::sleep(Duration::from_millis(sleep_ms));
             }
             i += 1;
@@ -527,7 +525,7 @@ impl Generator {
             }
             progress.report(i + 1);
             if let Some((min, max)) = self.delay_range {
-                let sleep_ms = rng.gen_range(min..=max);
+                let sleep_ms = rng.random_range(min..=max);
                 std::thread::sleep(Duration::from_millis(sleep_ms));
             }
             i += 1;
@@ -553,6 +551,7 @@ impl Generator {
             let all_random_names: HashSet<String> = auto_random.union(&random_vars.keys().cloned().collect()).cloned().collect();
 
             let mut tera = Tera::default();
+            register_tera_extensions(&mut tera);
             for (i, tpl) in templates.iter().enumerate() {
                 if tera.add_raw_template(&format!("tpl_{}", i), tpl).is_err() {
                     return;
@@ -565,30 +564,29 @@ impl Generator {
                     let mut rng = StdRng::seed_from_u64(seed + i);
                     let template_index = match rotation {
                         TemplateRotation::Sequential | TemplateRotation::RoundRobin => (i as usize) % templates.len(),
-                        TemplateRotation::Random => rng.gen_range(0..templates.len()),
+                        TemplateRotation::Random => rng.random_range(0..templates.len()),
                         TemplateRotation::None => 0,
                     };
                     let template = &templates[template_index];
                     let used_vars = extract_template_vars(template);
 
-                    let mut ctx: HashMap<String, tera::Value> = HashMap::new();
-                    ctx.insert("timestamp".into(), tera::Value::String(ts_to_rfc3339(ts)));
-                    ctx.insert("level".into(), tera::Value::String(config.log_level.clone()));
-                    ctx.insert("index".into(), tera::Value::Number(tera::Number::from(i + 1)));
-                    ctx.insert("message".into(), tera::Value::String(config.message.clone()));
+                    let mut context = Context::new();
+                    context.insert("timestamp", &ts_to_rfc3339(ts));
+                    context.insert("level", &config.log_level);
+                    context.insert("index", &(i + 1));
+                    context.insert("message", &config.message);
 
                     for (k, v) in &template_vars {
-                        ctx.insert(k.clone(), tera::Value::String(v.clone()));
+                        context.insert(k.clone(), v);
                     }
 
                     for var_name in &used_vars {
                         if BUILTIN_VARS.contains(&var_name.as_str()) || template_vars.contains_key(var_name) { continue; }
                         if !all_random_names.contains(var_name) { continue; }
                         let val = generate_random_value(var_name, &config, &mut rng);
-                        ctx.insert(var_name.clone(), tera::Value::String(val));
+                        context.insert(var_name.clone(), &val);
                     }
 
-                    let context = Context::from_serialize(&ctx).expect("context");
                     let rendered = tera.render(&format!("tpl_{}", template_index), &context).unwrap_or_else(|_| "<render error>".to_string());
 
                     LogEntry {
@@ -613,7 +611,7 @@ impl Generator {
                 emitted += 1;
                 progress.report(emitted);
                 if let Some((min, max)) = self.delay_range {
-                    let sleep_ms = rng.gen_range(min..=max);
+                    let sleep_ms = rng.random_range(min..=max);
                     std::thread::sleep(Duration::from_millis(sleep_ms));
                 }
             }

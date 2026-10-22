@@ -290,10 +290,11 @@ impl HttpWriter {
         retry_attempts: u32,
         retry_delay_ms: u64,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let client = ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_secs(5))
-            .timeout_read(std::time::Duration::from_secs(10))
-            .build();
+        let client: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(5)))
+            .timeout_recv_body(Some(std::time::Duration::from_secs(10)))
+            .build()
+            .into();
 
         let custom_headers: Vec<(String, String)> = headers
             .map(|h| h.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
@@ -349,20 +350,23 @@ impl HttpWriter {
 
         let mut last_err = None;
         for attempt in 0..=self.retry_attempts {
-            let mut req = self.client.post(&self.url).set("Content-Type", content_type);
+            let mut req = self.client.post(self.url.as_str()).header("Content-Type", content_type);
             for (k, v) in &self.headers {
-                req = req.set(k, v);
+                req = req.header(k.as_str(), v.as_str());
             }
 
-            let result = req.send_string(&body);
+            let result = req.send(body.as_str());
             match result {
-                Ok(resp) if resp.status() >= 200 && resp.status() < 300 => {
+                Ok(resp) if resp.status().is_success() => {
                     self.entries_sent += self.batch.len() as u64;
                     self.batch.clear();
                     return Ok(());
                 }
                 Ok(resp) => {
                     last_err = Some(format!("HTTP {}", resp.status()));
+                }
+                Err(ureq::Error::StatusCode(code)) => {
+                    last_err = Some(format!("HTTP {}", code));
                 }
                 Err(e) => {
                     last_err = Some(format!("{}", e));
@@ -470,7 +474,7 @@ mod kafka_impl {
             config.set("bootstrap.servers", brokers);
             config.set("acks", acks);
             config.set("queue.buffering.max.ms", "100");
-            config.set("message.timeout.ms", &timeout_ms.to_string());
+            config.set("message.timeout.ms", timeout_ms.to_string());
             let producer: BaseProducer = config.create()?;
             Ok(KafkaWriter {
                 producer,
@@ -498,7 +502,10 @@ mod kafka_impl {
                     self.entries_produced += 1;
                 }
             }
-            self.producer.flush(Duration::from_secs(15));
+            if let Err(e) = self.producer.flush(Duration::from_secs(15)) {
+                self.errors += 1;
+                eprintln!("Kafka flush error: {}", e);
+            }
             self.batch.clear();
             self.keys.clear();
             Ok(())

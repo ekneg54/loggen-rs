@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod config;
+pub mod filters;
 pub mod generator;
 pub mod output;
 

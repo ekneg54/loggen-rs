@@ -23,6 +23,7 @@ loggen generate [--count N]           # run binary
 - `src/cli.rs` — `load_base_config`, `apply_cli_args`, `create_writer`, `write_entries`
 - `src/generator.rs` — `Generator` with Tera template mode and legacy fallback; `generate()` returns `Vec<LogEntry>`, CLI uses streaming `generate_to_writer()`
 - `src/config.rs` — `Config`, `OutputConfig`, `LogEntry`, YAML deser via `serde_yaml`
+- `src/filters.rs` — `register_tera_extensions()`: re-registers the Tera 1 filters/functions (`date`, `json_encode`, `urlencode`, `slugify`, `striptags`, `spaceless`, `filesizeformat`, `addslashes`, `get_random`, `now`) that Tera 2 no longer ships with
 - `src/output.rs` — `LogWriter` trait, `StdoutWriter`, `FileWriter` (append by default, configurable truncate + `rotate_bytes`), `BufferedLogWriter`, `HttpWriter` (full impl with batching/retry), `KafkaWriter` (feature-gated via `--features kafka`), `ProgressReporter`
 
 ## Quirks
@@ -34,7 +35,8 @@ loggen generate [--count N]           # run binary
 - Simulation mode (`sim_delay`, `sim_rotation`) makes streaming infinite (until Ctrl+C via `ctrlc`)
 - `ProgressReporter` auto-enables when count >= 100,000 and target != stdout
 - Default `config.count` is **1** (not user-friendly but deliberate)
-- `config.seed` enables reproducible output; no seed = random
+- `config.seed` enables reproducible output; no seed = random (seeded output is only reproducible within the same `rand` version)
+- Tera 2 is stricter than Tera 1: unknown variables/fields are render errors (`<render error>`) instead of empty output
 - `Config::has_templates()` is the canonical template-mode check
 - `Cargo.lock` is committed despite being in `.gitignore` — keep both
 - Container image via `nix build .#container` (Nix flake)
@@ -42,7 +44,7 @@ loggen generate [--count N]           # run binary
 
 ## Testing
 
-- Inline tests (`#[cfg(test)]`) in `config.rs`, `generator.rs`, `output.rs`
+- Inline tests (`#[cfg(test)]`) in `config.rs`, `generator.rs`, `output.rs`, `filters.rs`
 - Integration tests in `tests/unit/` (wired via `tests/mod.rs`)
 - **Tests write files to CWD** (no `tempfile` crate): `test_config*.yaml`, `test_output*.log`, `test_new_file.log`, `test_template_mode.log`, `test_cli_gen.log`, `output.log`
 - Integration tests at `tests/unit/test_config.rs` read from `examples/` — must run from repo root
@@ -50,7 +52,7 @@ loggen generate [--count N]           # run binary
 
 ## Dependencies
 
-`clap` (derive), `clap_complete`, `serde`/`serde_yaml`, `tera`, `rand`, `rayon`, `regex`, `chrono`, `ureq` (HTTP), `serde_json`, `ctrlc`. Optional: `rdkafka` behind `kafka` feature.
+`clap` (derive), `clap_complete`, `serde`/`serde_yaml`, `tera` 2.x + `tera-contrib`, `rand`, `rayon`, `regex`, `chrono`, `ureq` (HTTP), `serde_json`, `ctrlc`. Optional: `rdkafka` behind `kafka` feature.
 
 ## Security history
 
