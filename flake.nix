@@ -23,7 +23,7 @@
 
         loggen-data = pkgs.stdenv.mkDerivation {
           pname = "loggen-data";
-          version = "0.4.1";
+          version = "0.5.0";
           src = ./.;
           installPhase = ''
             mkdir -p $out/usr/share/loggen
